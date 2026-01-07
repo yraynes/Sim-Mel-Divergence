@@ -1,0 +1,1653 @@
+---
+title: "D. melanogaster/ D. simulans expression analysis: Rapamycin Treatment Effects"
+output:
+  html_document:
+    toc: true
+params:
+   FDR: 0.05
+   LFC: 0.0
+date: "2024-05-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+set.seed(1234)
+```
+
+## Load packages
+
+This document depends on the following packages:
+```{r, message=FALSE, warning = FALSE}
+require(drosophila2.db)
+library(tidyverse)
+library(DESeq2)
+library(apeglm)
+library(eulerr)
+library(EnhancedVolcano)
+library(flybaseR)
+library(org.Dm.eg.db)
+library("org.Dm.eg.db")
+library(AnnotationDbi)
+library(repr)
+library(vsn)
+library(pheatmap)
+library(clusterProfiler)
+library(DEGreport)
+source("FBidsTOSymbol.R")
+source("mito_genes.R")
+library("RNAseqQC")
+library("ensembldb")
+library("dplyr")
+library("ggplot2")
+library("purrr")
+library("tidyr")
+library("tibble")
+library("magrittr")
+library(simplifyEnrichment)
+library("fgsea")
+library(stats)
+library(msigdbr)
+library(GO.db)
+library(ggridges)
+library(enrichplot)
+library(ggupset)
+library(UpSetR)
+library(rrvgo)
+library("IHW")
+library(patchwork)
+library(ggrepel)
+library(ggpubr) 
+library(gridExtra)
+library(vegan)
+library(cowplot)
+```
+
+## Read count tables/group info into R.
+```{r data acquisition}
+
+cts <- as.matrix(read.csv("rapa_count_table_sim_mel.csv", row.names = 1))
+cts <- subset(cts, select = -OOFCH4)
+
+coldata <- read.csv("rapa_group_data_sim_mel.csv", row.names = 1)
+coldata <- coldata[colnames(cts),]
+
+#save experimental features as factors
+coldata$Treatment <- relevel(factor(coldata$Treatment), ref = "Rapa")
+coldata$Tissue <- as.factor(coldata$Tissue)
+coldata$Species <- as.factor(coldata$Species)
+coldata$Group <- as.factor(coldata$Group)
+coldata$Sex <- as.factor(coldata$Sex)
+coldata$SpeciesTreatment <-as.factor(paste0(coldata$Species, coldata$Treatment))
+```
+
+
+## Female Heads
+
+```{r subset count data to female heads}
+cts_fh <- cts[,substring(colnames(cts), 3, 3)=="F" & substring(colnames(cts), 5, 5)=="H"] 
+coldata_fh <- coldata[colnames(cts_fh),]
+
+gene_universe_fh <- rownames(cts[rowSums(cts_fh)>0, ])
+length(gene_universe_fh)
+```
+
+### DESeqDataSet Object 
+```{r make a new DESeqDataSet for female heads}
+dds_fh <- DESeqDataSetFromMatrix(countData = cts_fh,
+                              colData = coldata_fh,
+                              design = ~ SpeciesTreatment) #design matrix with no intercept
+keep <- rowSums(counts(dds_fh)) >= 1 #minimal pre-filtering
+dds_fh <- dds_fh[keep,]
+vst_fh <- vst(dds_fh, blind = TRUE)
+```
+
+#### Treatment contrast in D.mel
+
+```{r differential expression for treatments effect RvsC in OO: female heads}
+res_fh_RvsC_OO <- readRDS("species_treatment_effect/res_fh_RvsC_OO.rds")
+res_fh_RvsC_OO_Ordered <- res_fh_RvsC_OO[order(res_fh_RvsC_OO$pvalue),]
+res_fh_RvsC_OO_Sig <- subset(res_fh_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+hist(res_fh_RvsC_OO$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_fh_RvsC_OO")
+```
+
+#### Treatment contrast in D.sim
+
+```{r differential expression for treatments effect RvsC in SS: female heads}
+res_fh_RvsC_SS <- readRDS("species_treatment_effect/res_fh_RvsC_SS.rds")
+summary(res_fh_RvsC_SS)
+res_fh_RvsC_SS_Ordered <- res_fh_RvsC_SS[order(res_fh_RvsC_SS$pvalue),]
+res_fh_RvsC_SS_Sig <- subset(res_fh_RvsC_SS_Ordered, padj < FDR.Thresh)
+
+hist(res_fh_RvsC_SS$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_fh_RvsC_SS")
+```
+#### Baseline expression: D.sim and D.mel comparison
+
+```{r, expression comparison}
+
+fh_exp <- as.data.frame(assay(vst_fh)) %>%
+  mutate(OOFC_avg = rowMeans(dplyr::select(., contains("OOFC")), na.rm = TRUE)) %>%
+  mutate(OOFR_avg = rowMeans(dplyr::select(., contains("OOFR")), na.rm = TRUE)) %>%
+  mutate(SSFC_avg = rowMeans(dplyr::select(., contains("SSFC")), na.rm = TRUE)) %>%
+  mutate(SSFR_avg = rowMeans(dplyr::select(., contains("SSFR")), na.rm = TRUE))
+
+bootstrap_one_minus_rho_CI <- function(x, y, nboot = 1000, conf = 0.95) {
+  complete <- complete.cases(x, y)
+  x <- x[complete]
+  y <- y[complete]
+  
+  rho_obs <- cor(x, y, method = "spearman")
+  one_minus_rho <- 1 - rho_obs
+  
+  boot_rho <- replicate(nboot, {
+    idx <- sample(seq_along(x), replace = TRUE)
+    cor(x[idx], y[idx], method = "spearman")
+  })
+  
+  boot_one_minus_rho <- 1 - boot_rho
+  ci <- quantile(boot_one_minus_rho, c((1 - conf) / 2, 1 - (1 - conf) / 2))
+  mean_ci <- mean(abs(ci - one_minus_rho))  # average half-width
+  
+  c(OneMinusRho = one_minus_rho, lower = ci[1], upper = ci[2], mean_CI = mean_ci)
+}
+
+res <- bootstrap_one_minus_rho_CI(fh_exp$OOFC_avg, fh_exp$SSFC_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+
+res <- bootstrap_one_minus_rho_CI(fh_exp$OOFR_avg, fh_exp$SSFR_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+```
+#### LFC by RAPA comparison
+
+```{r, FH LFC comparison: all genes}
+merged_fh <- merge( as.data.frame(res_fh_RvsC_SS) %>% 
+                      dplyr::select("log2FoldChange.SS" = log2FoldChange, "padj.SS" = padj),
+                    as.data.frame(res_fh_RvsC_OO) %>% 
+                      dplyr::select("log2FoldChange.OO" = log2FoldChange, "padj.OO" = padj), 
+                    by = 0, 
+                    all.x = TRUE) %>%
+  mutate(
+    padj_comb = case_when(
+    padj.OO < 0.05 & padj.SS < 0.05 ~ "In Both Species",
+    padj.OO < 0.05 ~ "In D. melanogaster Only",
+    padj.SS < 0.05 ~ "In D. simulans Only",
+    TRUE ~ "In Neither Species"),  # If none of the conditions are met
+    ABS.LFC.SS = abs(log2FoldChange.SS),
+    ABS.LFC.OO = abs(log2FoldChange.OO),
+    ABS.diff = ABS.LFC.OO-ABS.LFC.SS
+    
+  )
+```
+
+```{r, FH LFC comparison plot}
+colors <- c(
+  "In Both Species" = "midnightblue",    
+  "In Neither Species" = "goldenrod",   
+  "In D. melanogaster Only" = "forestgreen",         
+  "In D. simulans Only" = "firebrick"             
+)
+
+# First plot the yellow points (underneath)
+fh.lfc.comp <- ggplot() +
+  geom_point(
+    data = subset(merged_fh, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  # Then plot everything else on top
+  geom_point(
+    data = subset(merged_fh, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") + 
+  geom_smooth(
+      data = merged_fh,
+      aes(x = log2FoldChange.SS, y = log2FoldChange.OO),
+      method = "lm", color = "black", linetype = "dashed", se = FALSE
+    ) +
+  
+  scale_color_manual(values = colors) +
+  labs(
+    x = "Fold change in SS",
+    y = "Fold change in OO",
+    color = "DE by Rapamycin:"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "top",
+    axis.text.x = element_text(size = 12, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 11)
+  )
+
+
+fh.lfc.comp
+```
+#### Jaccard dissimilarity 
+
+```{r, DEG comparison}
+genes_melanogaster <- rownames(res_fh_RvsC_OO_Sig)
+genes_simulans <- rownames(res_fh_RvsC_SS_Sig)
+
+intersection_genes <- intersect(genes_melanogaster, genes_simulans)
+num_intersection <- length(intersection_genes)
+
+union_genes <- union(genes_melanogaster, genes_simulans)
+num_union <- length(union_genes)
+
+jaccard_index <- num_intersection / num_union
+jaccard_distance_fh <- 1 - jaccard_index
+sprintf("1 - J = %.2f", jaccard_distance_fh)
+```
+
+
+## Female Thorax
+
+```{r subset count data to female thorax}
+cts_ft <- cts[,substring(colnames(cts), 3, 3)=="F" & substring(colnames(cts), 5, 5)=="T"] 
+coldata_ft <- coldata[colnames(cts_ft),]
+
+gene_universe_ft <- rownames(cts[rowSums(cts_ft)>0, ])
+length(gene_universe_ft)
+```
+
+### DESeqDataSet Object 
+```{r make a new DESeqDataSet for female thorax}
+dds_ft <- DESeqDataSetFromMatrix(countData = cts_ft,
+                              colData = coldata_ft,
+                              design = ~ SpeciesTreatment) #design matrix with no intercept
+
+keep <- rowSums(counts(dds_ft)) >= 1 #minimal pre-filtering
+dds_ft <- dds_ft[keep,]
+vst_ft <- vst(dds_ft, blind = TRUE)
+```
+
+
+#### Treatment contrast in D.mel
+
+```{r differential expression for treatments effect RvsC in OO: female thorax}
+res_ft_RvsC_OO <- readRDS("species_treatment_effect/res_ft_RvsC_OO.rds")
+summary(res_ft_RvsC_OO)
+res_ft_RvsC_OO_Ordered <- res_ft_RvsC_OO[order(res_ft_RvsC_OO$pvalue),]
+res_ft_RvsC_OO_Sig <- subset(res_ft_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+hist(res_ft_RvsC_OO$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_ft_RvsC_OO")
+```
+
+#### Treatment contrast in D.sim
+
+```{r differential expression for treatments effect RvsC in SS: female thorax}
+res_ft_RvsC_SS <- readRDS("species_treatment_effect/res_ft_RvsC_SS.rds")
+summary(res_ft_RvsC_SS)
+res_ft_RvsC_SS_Ordered <- res_ft_RvsC_SS[order(res_ft_RvsC_SS$pvalue),]
+res_ft_RvsC_SS_Sig <- subset(res_ft_RvsC_SS_Ordered, padj < FDR.Thresh)
+
+hist(res_ft_RvsC_SS$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_ft_RvsC_SS")
+```
+
+#### Baseline expression: D.sim and D.mel comparison
+
+```{r, expression comparison}
+ft_exp <- as.data.frame(assay(vst_ft)) %>%
+  mutate(OOFC_avg = rowMeans(dplyr::select(., contains("OOFC")), na.rm = TRUE)) %>%
+  mutate(OOFR_avg = rowMeans(dplyr::select(., contains("OOFR")), na.rm = TRUE)) %>%
+  mutate(SSFC_avg = rowMeans(dplyr::select(., contains("SSFC")), na.rm = TRUE)) %>%
+  mutate(SSFR_avg = rowMeans(dplyr::select(., contains("SSFR")), na.rm = TRUE))
+
+
+res <- bootstrap_one_minus_rho_CI(ft_exp$OOFC_avg, ft_exp$SSFC_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+```
+
+#### LFC by RAPA comparison
+```{r}
+merged_ft <- merge( as.data.frame(res_ft_RvsC_SS) %>% 
+                      dplyr::select("log2FoldChange.SS" = log2FoldChange, "padj.SS" = padj),
+                    as.data.frame(res_ft_RvsC_OO) %>% 
+                      dplyr::select("log2FoldChange.OO" = log2FoldChange, "padj.OO" = padj), 
+                    by = 0, 
+                    all.x = TRUE) %>%
+  mutate(padj_comb = case_when(
+    padj.OO < 0.05 & padj.SS < 0.05 ~ "In Both Species",
+    padj.OO < 0.05 ~ "In D. melanogaster Only",
+    padj.SS < 0.05 ~ "In D. simulans Only",
+    TRUE ~ "In Neither Species"),  # If none of the conditions are met
+    ABS.LFC.SS = abs(log2FoldChange.SS),
+    ABS.LFC.OO = abs(log2FoldChange.OO),
+    ABS.diff = ABS.LFC.OO-ABS.LFC.SS
+  )
+
+cor.test(merged_ft$log2FoldChange.SS, merged_ft$log2FoldChange.OO,
+         method = "spearman", use = "complete.obs")
+
+
+colors <- c(
+  "In Both Species" = "midnightblue",    
+  "In Neither Species" = "goldenrod",    
+  "In D. melanogaster Only" = "forestgreen",      
+  "In D. simulans Only" = "firebrick"             
+)
+
+ft.lfc.comp <- ggplot() +
+  geom_point(
+    data = subset(merged_ft, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_point(
+    data = subset(merged_ft, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") + 
+  geom_smooth(
+      data = merged_ft,
+      aes(x = log2FoldChange.SS, y = log2FoldChange.OO),
+      method = "lm", color = "black", linetype = "dashed", se = FALSE
+    ) +
+  
+  scale_color_manual(values = colors) +
+  labs(
+    x = "Fold change in D. simulans",
+    y = "Fold change in D. melanogaster",
+    color = "DE by Rapamycin:"
+  ) +
+  xlim(-7, 7)+
+  ylim(-7, 7)+
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text(size = 12, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 11)
+  )
+
+
+ft.lfc.comp
+```
+
+#### Jaccard dissimilarity
+
+```{r, DEG comparison}
+genes_melanogaster <- rownames(res_ft_RvsC_OO_Sig)
+genes_simulans <- rownames(res_ft_RvsC_SS_Sig)
+
+intersection_genes <- intersect(genes_melanogaster, genes_simulans)
+num_intersection <- length(intersection_genes)
+
+union_genes <- union(genes_melanogaster, genes_simulans)
+num_union <- length(union_genes)
+
+jaccard_index <- num_intersection / num_union
+jaccard_distance_ft <- 1 - jaccard_index
+sprintf("1 - J = %.2f", jaccard_distance_ft)
+```
+
+## Female Abdomen
+
+```{r subset count data to female abdomen}
+
+cts_fa <- cts[,substring(colnames(cts), 3, 3)=="F" & substring(colnames(cts), 5, 5)=="A"] 
+coldata_fa <- coldata[colnames(cts_fa),]
+
+gene_universe_fa <- rownames(cts[rowSums(cts_fa)>0, ])
+length(gene_universe_fa)
+```
+
+### DESeqDataSet Object 
+
+```{r make a new DESeqDataSet for female abdomen}
+dds_fa <- DESeqDataSetFromMatrix(countData = cts_fa,
+                              colData = coldata_fa,
+                              design = ~ SpeciesTreatment) #design matrix with no intercept
+
+keep <- rowSums(counts(dds_fa)) >= 1 #minimal pre-filtering
+summary(keep)
+dds_fa <- dds_fa[keep,]
+vst_fa <- vst(dds_fa, blind = TRUE)
+```
+
+
+#### Treatment contrast in D.mel
+
+```{r differential expression for treatments effect RvsC in OO: female abdomen}
+
+res_fa_RvsC_OO <- readRDS("species_treatment_effect/res_fa_RvsC_OO.rds")
+summary(res_fa_RvsC_OO)
+res_fa_RvsC_OO_Ordered <- res_fa_RvsC_OO[order(res_fa_RvsC_OO$pvalue),]
+res_fa_RvsC_OO_Sig <- subset(res_fa_RvsC_OO_Ordered, padj < FDR.Thresh)
+hist(res_fa_RvsC_OO$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_fa_RvsC_OO")
+```
+
+#### Treatment contrast in D.sim
+
+```{r differential expression for treatments effect RvsC in SS: female abdomen}
+res_fa_RvsC_SS <- readRDS("species_treatment_effect/res_fa_RvsC_SS.rds")
+
+summary(res_fa_RvsC_SS)
+res_fa_RvsC_SS_Ordered <- res_fa_RvsC_SS[order(res_fa_RvsC_SS$pvalue),]
+res_fa_RvsC_SS_Sig <- subset(res_fa_RvsC_SS_Ordered, padj < FDR.Thresh)
+hist(res_fa_RvsC_SS$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_fa_RvsC_SS")
+```
+
+#### Baseline expression: D.sim and D.mel comparison
+
+```{r, expression comparison}
+fa_exp <- as.data.frame(assay(vst_fa)) %>%
+  mutate(OOFC_avg = rowMeans(dplyr::select(., contains("OOFC")), na.rm = TRUE)) %>%
+  mutate(OOFR_avg = rowMeans(dplyr::select(., contains("OOFR")), na.rm = TRUE)) %>%
+  mutate(SSFC_avg = rowMeans(dplyr::select(., contains("SSFC")), na.rm = TRUE)) %>%
+  mutate(SSFR_avg = rowMeans(dplyr::select(., contains("SSFR")), na.rm = TRUE))
+
+
+res <- bootstrap_one_minus_rho_CI(fa_exp$OOFC_avg, fa_exp$SSFC_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+```
+
+#### LFC by RAPA comparison
+
+```{r}
+
+colors <- c(
+  "In Both Species" = "midnightblue",    
+  "In Neither Species" = "goldenrod",   
+  "In D. melanogaster Only" = "forestgreen",        
+  "In D. simulans Only" = "firebrick"            
+)
+
+
+merged_fa <- merge( as.data.frame(res_fa_RvsC_SS) %>% 
+                      dplyr::select("log2FoldChange.SS" = log2FoldChange, "padj.SS" = padj),
+                    as.data.frame(res_fa_RvsC_OO) %>% 
+                      dplyr::select("log2FoldChange.OO" = log2FoldChange, "padj.OO" = padj), 
+                    by = 0, 
+                    all.x = TRUE) %>%
+  mutate(padj_comb = case_when(
+    padj.OO < 0.05 & padj.SS < 0.05 ~ "In Both Species",
+    padj.OO < 0.05 ~ "In D. melanogaster Only",
+    padj.SS < 0.05 ~ "In D. simulans Only",
+    TRUE ~ "In Neither Species"  # If none of the conditions are met
+  ),
+      ABS.LFC.SS = abs(log2FoldChange.SS),
+    ABS.LFC.OO = abs(log2FoldChange.OO),
+    ABS.diff = ABS.LFC.OO-ABS.LFC.SS)
+
+cor.test(merged_fa$log2FoldChange.SS, merged_fa$log2FoldChange.OO,
+         method = "spearman", use = "complete.obs")
+
+fa.lfc.comp <- ggplot() +
+  geom_point(
+    data = subset(merged_fa, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+  geom_point(
+    data = subset(merged_fa, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") + 
+  geom_smooth(
+      data = merged_fa,
+      aes(x = log2FoldChange.SS, y = log2FoldChange.OO),
+      method = "lm", color = "black", linetype = "dashed", se = FALSE
+    ) +
+  
+  scale_color_manual(values = colors) +
+  labs(
+    x = "Fold change in SS",
+    y = "Fold change in OO",
+    color = "DE by Rapamycin:"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "top",
+    axis.text.x = element_text(size = 12, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 11)
+  )
+
+
+fa.lfc.comp
+```
+
+#### Jaccard dissimilarity
+
+```{r, DEG comparison}
+genes_melanogaster <- rownames(res_fa_RvsC_OO_Sig)
+genes_simulans <- rownames(res_fa_RvsC_SS_Sig)
+
+intersection_genes <- intersect(genes_melanogaster, genes_simulans)
+num_intersection <- length(intersection_genes)
+
+union_genes <- union(genes_melanogaster, genes_simulans)
+num_union <- length(union_genes)
+
+jaccard_index <- num_intersection / num_union
+jaccard_distance_fa <- 1 - jaccard_index
+sprintf("1 - J = %.2f", jaccard_distance_fa)
+```
+
+## Male Heads
+
+```{r subset count data to male heads}
+
+cts_mh <- cts[,substring(colnames(cts), 3, 3)=="M" & substring(colnames(cts), 5, 5)=="H"] 
+coldata_mh <- coldata[colnames(cts_mh),]
+
+gene_universe_mh <- rownames(cts[rowSums(cts_mh)>0, ])
+length(gene_universe_mh)
+
+```
+
+### DESeqDataSet Object 
+```{r make a new DESeqDataSet for male heads}
+dds_mh <- DESeqDataSetFromMatrix(countData = cts_mh,
+                              colData = coldata_mh,
+                              design = ~ SpeciesTreatment) #design matrix with no intercept
+
+keep <- rowSums(counts(dds_mh)) >= 1 #minimal pre-filtering
+dds_mh <- dds_mh[keep,]
+vst_mh <- vst(dds_mh, blind = TRUE)
+```
+
+
+#### Treatment contrast in D.mel
+
+```{r differential expression for treatments effect RvsC in OO: male heads}
+res_mh_RvsC_OO <- readRDS("species_treatment_effect/res_mh_RvsC_OO.rds")
+
+summary(res_mh_RvsC_OO)
+res_mh_RvsC_OO_Ordered <- res_mh_RvsC_OO[order(res_mh_RvsC_OO$pvalue),]
+res_mh_RvsC_OO_Sig <- subset(res_mh_RvsC_OO_Ordered, padj < FDR.Thresh)
+hist(res_mh_RvsC_OO$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_mh_RvsC_OO")
+
+```
+
+#### Treatment contrast in D.sim
+
+```{r differential expression for treatments effect RvsC in SS: male heads}
+res_mh_RvsC_SS <- readRDS("species_treatment_effect/res_mh_RvsC_SS.rds")
+
+summary(res_mh_RvsC_SS)
+res_mh_RvsC_SS_Ordered <- res_mh_RvsC_SS[order(res_mh_RvsC_SS$pvalue),]
+res_mh_RvsC_SS_Sig <- subset(res_mh_RvsC_SS_Ordered, padj < FDR.Thresh)
+hist(res_mh_RvsC_SS$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_mh_RvsC_SS")
+```
+
+#### Baseline expression: D.sim and D.mel comparison
+
+```{r, expression comparison}
+
+mh_exp <- as.data.frame(assay(vst_mh)) %>%
+  mutate(OOMC_avg = rowMeans(dplyr::select(., contains("OOMC")), na.rm = TRUE)) %>%
+  mutate(OOMR_avg = rowMeans(dplyr::select(., contains("OOMR")), na.rm = TRUE)) %>%
+  mutate(SSMC_avg = rowMeans(dplyr::select(., contains("SSMC")), na.rm = TRUE)) %>%
+  mutate(SSMR_avg = rowMeans(dplyr::select(., contains("SSMR")), na.rm = TRUE))
+
+res <- bootstrap_one_minus_rho_CI(mh_exp$OOMC_avg, mh_exp$SSMC_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+```
+
+#### LFC by RAPA comparison
+
+```{r, fig.width=7, fig.height=7}
+merged_mh <- merge( as.data.frame(res_mh_RvsC_SS) %>% 
+                      dplyr::select("log2FoldChange.SS" = log2FoldChange, "padj.SS" = padj),
+                    as.data.frame(res_mh_RvsC_OO) %>% 
+                      dplyr::select("log2FoldChange.OO" = log2FoldChange, "padj.OO" = padj), 
+                    by = 0, 
+                    all.x = TRUE) %>%
+  mutate(padj_comb = case_when(
+    padj.OO < 0.05 & padj.SS < 0.05 ~ "In Both Species",
+    padj.OO < 0.05 ~ "In D. melanogaster Only",
+    padj.SS < 0.05 ~ "In D. simulans Only",
+    TRUE ~ "In Neither Species"  # If none of the conditions are met
+  ),
+      ABS.LFC.SS = abs(log2FoldChange.SS),
+    ABS.LFC.OO = abs(log2FoldChange.OO),
+    ABS.diff = ABS.LFC.OO-ABS.LFC.SS)
+
+cor.test(merged_mh$log2FoldChange.SS, merged_mh$log2FoldChange.OO,
+         method = "spearman", use = "complete.obs")
+
+mh.lfc.comp <- ggplot() +
+  geom_point(
+    data = subset(merged_mh, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  # Then plot everything else on top
+  geom_point(
+    data = subset(merged_mh, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  # Add guide lines and formatting
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") + 
+  geom_smooth(
+      data = merged_mh,
+      aes(x = log2FoldChange.SS, y = log2FoldChange.OO),
+      method = "lm", color = "black", linetype = "dashed", se = FALSE
+    ) +
+  
+  scale_color_manual(values = colors) +
+  labs(
+    x = "Fold change in SS",
+    y = "Fold change in OO",
+    color = "DE by Rapamycin:"
+  ) +
+  xlim(-5, 5) +
+  ylim(-5, 5) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "top",
+    axis.text.x = element_text(size = 12, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 11)
+  )
+
+
+mh.lfc.comp
+```
+
+#### Jaccard dissimilarity
+
+```{r, DEG comparison}
+genes_melanogaster <- rownames(res_mh_RvsC_OO_Sig)
+genes_simulans <- rownames(res_mh_RvsC_SS_Sig)
+
+intersection_genes <- intersect(genes_melanogaster, genes_simulans)
+num_intersection <- length(intersection_genes)
+
+union_genes <- union(genes_melanogaster, genes_simulans)
+num_union <- length(union_genes)
+
+jaccard_index <- num_intersection / num_union
+jaccard_distance_mh <- 1 - jaccard_index
+
+sprintf("1 - J = %.2f", jaccard_distance_mh)
+```
+
+## Male Thorax
+
+```{r subset count data to male thorax}
+
+cts_mt <- cts[,substring(colnames(cts), 3, 3)=="M" & substring(colnames(cts), 5, 5)=="T"] 
+coldata_mt <- coldata[colnames(cts_mt),]
+
+gene_universe_mt <- rownames(cts[rowSums(cts_mt)>0, ])
+length(gene_universe_mt)
+```
+### DESeqDataSet Object 
+```{r make a new DESeqDataSet for male thorax}
+dds_mt <- DESeqDataSetFromMatrix(countData = cts_mt,
+                              colData = coldata_mt,
+                              design = ~ SpeciesTreatment) #design matrix with no intercept
+
+keep <- rowSums(counts(dds_mt)) >= 1 #minimal pre-filtering
+dds_mt <- dds_mt[keep,]
+vst_mt <- vst(dds_mt, blind = TRUE)
+```
+
+#### Treatment contrast in D.mel
+
+```{r differential expression for treatments effect RvsC in OO: male thorax}
+res_mt_RvsC_OO <- readRDS("species_treatment_effect/res_mt_RvsC_OO.rds")
+
+summary(res_mt_RvsC_OO)
+res_mt_RvsC_OO_Ordered <- res_mt_RvsC_OO[order(res_mt_RvsC_OO$pvalue),]
+res_mt_RvsC_OO_Sig <- subset(res_mt_RvsC_OO_Ordered, padj < FDR.Thresh)
+hist(res_mt_RvsC_OO$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_mt_RvsC_OO")
+```
+
+#### Treatment contrast in D.sim
+
+```{r differential expression for treatments effect RvsC in SS: male thorax}
+res_mt_RvsC_SS <- readRDS("species_treatment_effect/res_mt_RvsC_SS.rds")
+
+summary(res_mt_RvsC_SS)
+res_mt_RvsC_SS_Ordered <- res_mt_RvsC_SS[order(res_mt_RvsC_SS$pvalue),]
+res_mt_RvsC_SS_Sig <- subset(res_mt_RvsC_SS_Ordered, padj < FDR.Thresh)
+hist(res_mt_RvsC_SS$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_mt_RvsC_SS")
+```
+
+#### Baseline expression: D.sim and D.mel comparison
+
+```{r, expression comparison}
+
+mt_exp <- as.data.frame(assay(vst_mt)) %>%
+  mutate(OOMC_avg = rowMeans(dplyr::select(., contains("OOMC")), na.rm = TRUE)) %>%
+  mutate(OOMR_avg = rowMeans(dplyr::select(., contains("OOMR")), na.rm = TRUE)) %>%
+  mutate(SSMC_avg = rowMeans(dplyr::select(., contains("SSMC")), na.rm = TRUE)) %>%
+  mutate(SSMR_avg = rowMeans(dplyr::select(., contains("SSMR")), na.rm = TRUE))
+
+
+res <- bootstrap_one_minus_rho_CI(mt_exp$OOMC_avg, mt_exp$SSMC_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+```
+
+#### LFC by RAPA comparison
+
+```{r}
+merged_mt <- merge( as.data.frame(res_mt_RvsC_SS) %>% 
+                      dplyr::select("log2FoldChange.SS" = log2FoldChange, "padj.SS" = padj),
+                    as.data.frame(res_mt_RvsC_OO) %>% 
+                      dplyr::select("log2FoldChange.OO" = log2FoldChange, "padj.OO" = padj), 
+                    by = 0, 
+                    all.x = TRUE) %>%
+  mutate(padj_comb = case_when(
+    padj.OO < 0.05 & padj.SS < 0.05 ~ "In Both Species",
+    padj.OO < 0.05 ~ "In D. melanogaster Only",
+    padj.SS < 0.05 ~ "In D. simulans Only",
+    TRUE ~ "In Neither Species"  # If none of the conditions are met
+  ),
+      ABS.LFC.SS = abs(log2FoldChange.SS),
+    ABS.LFC.OO = abs(log2FoldChange.OO),
+    ABS.diff = ABS.LFC.OO-ABS.LFC.SS)
+
+cor.test(merged_mt$log2FoldChange.SS, merged_mt$log2FoldChange.OO,
+         method = "spearman", use = "complete.obs")
+
+mt.lfc.comp <- ggplot() +
+  geom_point(
+    data = subset(merged_mt, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_point(
+    data = subset(merged_mt, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") + 
+  geom_smooth(
+      data = merged_mt,
+      aes(x = log2FoldChange.SS, y = log2FoldChange.OO),
+      method = "lm", color = "black", linetype = "dashed", se = FALSE
+    ) +
+  
+  scale_color_manual(values = colors) +
+  labs(
+    x = "Fold change in D. simulans",
+    y = "Fold change in D. melanogaster",
+    color = "DE by Rapamycin:"
+  ) +
+  theme_minimal() +
+    xlim(-7, 7)+
+  ylim(-7, 7)+
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "right",
+    axis.text.x = element_text(size = 12, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 11)
+  )
+
+
+mt.lfc.comp
+```
+
+#### Jaccard dissimilarity
+
+```{r, DEG comparison}
+genes_melanogaster <- rownames(res_mt_RvsC_OO_Sig)
+genes_simulans <- rownames(res_mt_RvsC_SS_Sig)
+
+intersection_genes <- intersect(genes_melanogaster, genes_simulans)
+num_intersection <- length(intersection_genes)
+
+union_genes <- union(genes_melanogaster, genes_simulans)
+num_union <- length(union_genes)
+
+jaccard_index <- num_intersection / num_union
+jaccard_distance_mt <- 1 - jaccard_index
+
+sprintf("1 - J = %.2f", jaccard_distance_mt)
+```
+
+
+## Male Abdomen
+
+```{r subset count data to male abdomen}
+cts_ma <- cts[,substring(colnames(cts), 3, 3)=="M" & substring(colnames(cts), 5, 5)=="A"] 
+coldata_ma <- coldata[colnames(cts_ma),]
+
+gene_universe_ma <- rownames(cts[rowSums(cts_ma)>0, ])
+length(gene_universe_ma)
+```
+
+### DESeqDataSet Object 
+```{r make a new DESeqDataSet for male abdomen}
+dds_ma <- DESeqDataSetFromMatrix(countData = cts_ma,
+                              colData = coldata_ma,
+                              design = ~ SpeciesTreatment) #design matrix with no intercept
+
+keep <- rowSums(counts(dds_ma)) >= 1 #minimal pre-filtering
+dds_ma <- dds_ma[keep,]
+vst_ma <- vst(dds_ma, blind = TRUE)
+```
+
+#### Treatment contrast in D.mel
+
+```{r differential expression for treatments effect RvsC in OO: male abdomen}
+res_ma_RvsC_OO <- readRDS("species_treatment_effect/res_ma_RvsC_OO.rds")
+summary(res_ma_RvsC_OO)
+
+res_ma_RvsC_OO_Ordered <- res_ma_RvsC_OO[order(res_ma_RvsC_OO$pvalue),]
+res_ma_RvsC_OO_Sig <- subset(res_ma_RvsC_OO_Ordered, padj < FDR.Thresh)
+hist(res_ma_RvsC_OO$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_ma_RvsC_OO")
+```
+
+#### Treatment contrast in D.sim
+
+```{r differential expression for treatments effect RvsC in SS: male abdomen}
+res_ma_RvsC_SS <- readRDS("species_treatment_effect/res_ma_RvsC_SS.rds")
+
+summary(res_ma_RvsC_SS)
+res_ma_RvsC_SS_Ordered <- res_ma_RvsC_SS[order(res_ma_RvsC_SS$pvalue),]
+res_ma_RvsC_SS_Sig <- subset(res_ma_RvsC_SS_Ordered, padj < FDR.Thresh)
+hist(res_ma_RvsC_SS$pvalue, breaks=0:50/50, xlab="p value", main="Histogram of nominal p values: res_ma_RvsC_SS")
+```
+
+#### Baseline expression: D.sim and D.mel comparison
+
+```{r, expression comparison}
+
+ma_exp <- as.data.frame(assay(vst_ma)) %>%
+  mutate(OOMC_avg = rowMeans(dplyr::select(., contains("OOMC")), na.rm = TRUE)) %>%
+  mutate(OOMR_avg = rowMeans(dplyr::select(., contains("OOMR")), na.rm = TRUE)) %>%
+  mutate(SSMC_avg = rowMeans(dplyr::select(., contains("SSMC")), na.rm = TRUE)) %>%
+  mutate(SSMR_avg = rowMeans(dplyr::select(., contains("SSMR")), na.rm = TRUE))
+
+res <- bootstrap_one_minus_rho_CI(ma_exp$OOMC_avg, ma_exp$SSMC_avg, nboot = 10000)
+sprintf("1 - ρ = %.2f ± %.2f", res["OneMinusRho"], res["mean_CI"])
+```
+
+
+#### LFC by RAPA comparison 
+
+```{r}
+merged_ma <- merge( as.data.frame(res_ma_RvsC_SS) %>% 
+                      dplyr::select("log2FoldChange.SS" = log2FoldChange, "padj.SS" = padj),
+                    as.data.frame(res_ma_RvsC_OO) %>% 
+                      dplyr::select("log2FoldChange.OO" = log2FoldChange, "padj.OO" = padj), 
+                    by = 0, 
+                    all.x = TRUE) %>%
+  mutate(padj_comb = case_when(
+    padj.OO < 0.05 & padj.SS < 0.05 ~ "In Both Species",
+    padj.OO < 0.05 ~ "In D. melanogaster Only",
+    padj.SS < 0.05 ~ "In D. simulans Only",
+    TRUE ~ "In Neither Species"  # If none of the conditions are met
+  ),
+      ABS.LFC.SS = abs(log2FoldChange.SS),
+    ABS.LFC.OO = abs(log2FoldChange.OO),
+    ABS.diff = ABS.LFC.OO-ABS.LFC.SS)
+
+cor.test(merged_ma$log2FoldChange.SS, merged_ma$log2FoldChange.OO,
+         method = "spearman", use = "complete.obs")
+
+ma.lfc.comp <- ggplot() +
+  geom_point(
+    data = subset(merged_ma, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_point(
+    data = subset(merged_ma, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "black") + 
+  geom_smooth(
+      data = merged_ma,
+      aes(x = log2FoldChange.SS, y = log2FoldChange.OO),
+      method = "lm", color = "black", linetype = "dashed", se = FALSE
+    ) +
+  
+  scale_color_manual(values = colors) +
+  labs(
+    x = "Fold change in SS",
+    y = "Fold change in OO",
+    color = "DE by Rapamycin:"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "top",
+    axis.text.x = element_text(size = 12, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 11)
+  )
+
+
+ma.lfc.comp
+```
+
+#### Jaccard dissimilarity 
+
+```{r, DEG comparison}
+genes_melanogaster <- rownames(res_ma_RvsC_OO_Sig)
+genes_simulans <- rownames(res_ma_RvsC_SS_Sig)
+
+intersection_genes <- intersect(genes_melanogaster, genes_simulans)
+num_intersection <- length(intersection_genes)
+
+union_genes <- union(genes_melanogaster, genes_simulans)
+num_union <- length(union_genes)
+
+jaccard_index <- num_intersection / num_union
+jaccard_distance_ma <- 1 - jaccard_index
+
+sprintf("1 - J = %.2f", jaccard_distance_ma)
+```
+
+## Treatment effects
+
+### Volcano plots
+
+```{r}
+
+
+ylim_common <- c(0, 120)   # adjust if needed after checking max -log10(p)
+
+make_volcano <- function(res, title, show_legend = FALSE) {
+  EnhancedVolcano(
+    res,
+    lab = convertFBids(rownames(res)),
+    subtitle = NULL,
+    x = "log2FoldChange",
+    y = "padj",
+    ylab = expression(-log[10](italic("FDR")) ),
+    pCutoff = 0.05,
+    FCcutoff = 0.58,
+    title = title,
+    titleLabSize = 22,
+    xlim = c(-10, 10),
+    ylim = ylim_common,
+    legendPosition = ifelse(show_legend, "bottom", "none"),
+    legendLabSize = 12,
+    legendIconSize = 4
+  ) +
+    theme(
+      plot.title = element_text(size = 11, hjust = 0.5)
+    )
+}
+
+# Heads
+
+fdmelheads <- make_volcano(
+  res_fh_RvsC_OO,
+  expression(italic("D. melanogaster") ~ Females)
+)
+
+fdsimheads <- make_volcano(
+  res_fh_RvsC_SS,
+  expression(italic("D. simulans") ~ Females)
+)
+
+mdmelheads <- make_volcano(
+  res_mh_RvsC_OO,
+  expression(italic("D. melanogaster") ~ Males)
+)
+
+mdsimheads <- make_volcano(
+  res_mh_RvsC_SS,
+  expression(italic("D. simulans") ~ Males)
+)
+
+# Thoraxes
+
+fdmelthorax <- make_volcano(
+  res_ft_RvsC_OO,
+  expression(italic("D. melanogaster") ~ Females)
+)
+
+fdsimthorax <- make_volcano(
+  res_ft_RvsC_SS,
+  expression(italic("D. simulans") ~ Females)
+)
+
+mdmelthorax <- make_volcano(
+  res_mt_RvsC_OO,
+  expression(italic("D. melanogaster") ~ Males)
+)
+
+mdsimthorax <- make_volcano(
+  res_mt_RvsC_SS,
+  expression(italic("D. simulans") ~ Males)
+)
+
+# Abdomen
+
+fdmelabdomen <- make_volcano(
+  res_fa_RvsC_OO,
+  expression(italic("D. melanogaster") ~ Females)
+)
+
+fdsimabdomen <- make_volcano(
+  res_fa_RvsC_SS,
+  expression(italic("D. simulans") ~ Females)
+)
+
+mdmelabdomen <- make_volcano(
+  res_ma_RvsC_OO,
+  expression(italic("D. melanogaster") ~ Males)
+)
+
+mdsimabdomen <- make_volcano(
+  res_ma_RvsC_SS,
+  expression(italic("D. simulans") ~ Males)
+)
+
+# Plot
+
+legend_plot <- make_volcano(
+  res_fh_RvsC_OO,
+  title = NULL,
+  show_legend = TRUE
+)
+
+shared_legend <- cowplot::get_legend(legend_plot)
+
+# Grid
+
+head_col <- plot_grid(fdmelheads, fdsimheads, mdmelheads, mdsimheads, ncol = 1)
+thorax_col <- plot_grid(fdmelthorax, fdsimthorax, mdmelthorax, mdsimthorax, ncol = 1)
+abdomen_col <- plot_grid(fdmelabdomen, fdsimabdomen, mdmelabdomen, mdsimabdomen, ncol = 1)
+
+col_titles <- plot_grid(
+  ggdraw() + draw_label("Head", fontface = "bold", size = 16),
+  ggdraw() + draw_label("Thorax", fontface = "bold", size = 16),
+  ggdraw() + draw_label("Abdomen", fontface = "bold", size = 16),
+  ncol = 3
+)
+
+volcano_grid <- plot_grid(
+  col_titles,
+  plot_grid(head_col, thorax_col, abdomen_col, ncol = 3),
+  ncol = 1,
+  rel_heights = c(0.05, 1)
+)
+
+final_figure <- plot_grid(
+  volcano_grid,
+  shared_legend,
+  ncol = 1,
+  rel_heights = c(1, 0.08)
+)
+
+ggsave(
+  "Figure_rapamycin_volcanoes.png",
+  final_figure,
+  width = 12,
+  height = 16,
+  dpi = 300
+)
+
+```
+
+### LFC plots in Fig 2
+
+```{r}
+merged_LFC <- merged_ft %>%
+  mutate(Sex="Female",
+         Tissue = "Thorax") %>%
+  bind_rows(merged_mt%>%
+  mutate(Sex="Male",
+         Tissue="Thorax")) %>%
+  bind_rows(merged_fa%>%
+  mutate(Sex="Female",
+         Tissue="Abdomen")) %>%
+  bind_rows(merged_ma%>%
+  mutate(Sex="Male",
+         Tissue="Abdomen")) %>%
+  bind_rows(merged_fh%>%
+  mutate(Sex="Female",
+         Tissue="Head")) %>%
+  bind_rows(merged_mh%>%
+  mutate(Sex="Male",
+         Tissue="Head")) %>%
+  mutate(Sex=factor(Sex, levels=c("Female","Male"))) %>%
+  mutate(Tissue=factor(Tissue, levels=c("Head","Thorax","Abdomen")))
+
+facet_labels <- expand.grid(
+  Tissue = levels(merged_LFC$Tissue),
+  Sex    = levels(merged_LFC$Sex)
+) %>%
+  dplyr::mutate(
+    label   = LETTERS[seq_len(dplyr::n())],
+    x_lab   = -7.5,
+    y_lab   = 9.5,
+    x_title = 0,
+    y_title = 9.5
+  )
+## plot
+LFCplot <- ggplot() +
+  geom_point(
+    data = subset(merged_LFC, padj_comb == "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 1.5
+  ) +
+  geom_point(
+    data = subset(merged_LFC, padj_comb != "In Neither Species"),
+    aes(x = log2FoldChange.SS, y = log2FoldChange.OO, color = padj_comb),
+    alpha = 0.7, size = 2
+  ) +
+  geom_abline(
+    slope = 1, intercept = 0,
+    linetype = "dashed",
+    color = "black",
+    linewidth = 0.6
+  ) +
+geom_segment(
+  x = 0, xend = 0,
+  y = -10, yend = 9,
+  linetype = "dashed",
+  color = "black",
+  linewidth = 0.6,
+  inherit.aes = FALSE
+)+
+  geom_hline(
+    yintercept = 0, linetype = "dashed", 
+    color = "black", linewidth = 0.6) +
+
+  facet_grid(Sex ~ Tissue) +
+  scale_color_manual(values = colors,
+                     guide = guide_legend(nrow = 2, byrow = TRUE)) +
+
+  labs(
+    x = expression("Fold change in " * italic("D. simulans")),
+    y = expression("Fold change in " * italic("D. melanogaster")),
+    color = "DE\n Transcripts:"
+  ) +
+
+    xlim(-10, 10) + 
+    ylim(-10, 10) +
+
+  geom_text(
+    data = facet_labels,
+    aes(x = x_lab, y = y_lab, label = label),
+    inherit.aes = FALSE,
+    size = 7,
+    fontface = "bold"
+  ) +
+
+  geom_text(
+    data = facet_labels,
+    aes(x = x_title, y = y_title, label = paste(Sex, Tissue)),
+    inherit.aes = FALSE,
+    size = 4,
+    fontface = "bold"
+  ) +
+
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 13, hjust = 0.5),
+    strip.text = element_blank(),
+    strip.background = element_blank(),
+    panel.spacing = unit(1.4, "lines")
+  )
+
+```
+
+
+### Statistical comparisons
+
+```{r}
+source("calculate_divergence_metrics2.R")
+
+results_divergence_metrics <- bind_rows(
+  calculate_divergence_metrics2(merged_fh, "Female Head"),
+  calculate_divergence_metrics2(merged_mh, "Male Head"),
+  calculate_divergence_metrics2(merged_fa, "Female Abdomen"),
+  calculate_divergence_metrics2(merged_ma, "Male Abdomen"),
+  calculate_divergence_metrics2(merged_ft, "Female Thorax"),
+  calculate_divergence_metrics2(merged_mt, "Male Thorax")
+) %>%
+  mutate(
+    SexTissue = factor(
+      paste(Sex, Tissue, sep = "\n"),
+      levels = c(
+        "Female\nHead",
+        "Female\nThorax",
+        "Female\nAbdomen",
+        "Male\nHead",
+        "Male\nThorax",
+        "Male\nAbdomen"
+      )
+    )
+  )
+
+results_all <- results_divergence_metrics %>%
+  dplyr::filter(Subset == "All Genes")
+
+results_LFC <- results_divergence_metrics %>%
+  dplyr::filter(Subset == "|LFC| > 0.58")
+
+results_padj <- results_divergence_metrics %>%
+  dplyr::filter(Subset == "padj < 0.05")
+
+
+results_divergence_metrics$Subset <- factor(
+  results_divergence_metrics$Subset,
+  levels = c("All Genes", "|LFC| > 0.58", "padj < 0.05")
+)
+
+```
+
+```{r}
+source("compare_tissues.R")
+
+tissue_list <- list(
+  Female_Head = merged_fh,
+  Female_Thorax = merged_ft,
+  Female_Abdomen = merged_fa,
+  Male_Head = merged_mh,
+  Male_Thorax = merged_mt,
+  Male_Abdomen = merged_ma
+)
+
+# Get all pairwise combinations of tissue names
+tissue_pairs <- combn(names(tissue_list), 2, simplify = FALSE)
+
+# Loop over pairs and run permutation test
+perm_results <- lapply(tissue_pairs, function(pair) {
+  tissue1 <- tissue_list[[pair[1]]]
+  tissue2 <- tissue_list[[pair[2]]]
+  
+  res <- compare_tissues_metrics(tissue1, tissue2, nperm = 10000)
+
+  tibble::tibble(
+    Tissue1 = pair[1],
+    Tissue2 = pair[2],
+    
+    # Spearman
+    rho1 = res$spearman$obs_A,
+    rho2 = res$spearman$obs_B,
+    rho_diff = res$spearman$obs_diff,
+    rho_pval = res$spearman$pval,
+    
+    # Euclidean
+    euc1 = res$euclidean$obs_A,
+    euc2 = res$euclidean$obs_B,
+    euc_diff = res$euclidean$obs_diff,
+    euc_pval = res$euclidean$pval
+  )
+})
+
+perm_results_df <- dplyr::bind_rows(perm_results)
+
+saveRDS(perm_results_df, file = "perm_results_df.rds")
+```
+
+### New divergence plot
+
+
+```{r}
+dE_plot <- 
+ggplot(results_all, aes(x = SexTissue, y = Euclidean, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = Euclidean_low, ymax = Euclidean_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    #y = expression(italic(d[E]) ~ "(Euclidean Distance)")
+    y = expression("Divergence (" * italic(d)[E] * ")")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+dcor_plot <- 
+ggplot(results_all, aes(x = SexTissue, y = OneMinusRho, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = OneMinusRho_low, ymax = OneMinusRho_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    #y = expression(italic(d)[cor] ~ "(1 - " * rho * ")")
+    y = expression("Divergence (" * italic(d)[cor] * ")")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+
+
+divergence_plot <- plot_grid(
+  dcor_plot, 
+  dE_plot, 
+  ncol = 2, 
+  labels = c("G", "H"),
+  label_size = 18
+)
+
+```
+
+### Figure 2
+
+```{r}
+
+combined_plot <- plot_grid(
+  LFCplot,
+  rel_heights = c(2,1),
+  divergence_plot, 
+  ncol = 1
+)
+
+combined_plot
+
+ggsave("Fig2.png", combined_plot,
+      width = 8.7,
+      height = 13)
+```
+
+### Suppl. divergence plots
+
+```{r}
+
+dE_plot_LFC <- 
+ggplot(results_LFC, aes(x = SexTissue, y = Euclidean, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = Euclidean_low, ymax = Euclidean_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    y = expression("Divergence (" * italic(d)[E] * ")")
+    #y = expression(italic(d[E]) ~ "(Euclidean Distance)")
+  ) +
+  theme(
+    text = element_text(size = 11),
+    #axis.text.x = element_text(size = 8.4),  # smaller x labels
+    axis.text.x = element_text(size = 10, angle = 45, hjust = 1),  # smaller x labels
+
+    legend.position = "none"
+  )
+
+dcor_plot_LFC <- 
+ggplot(results_LFC, aes(x = SexTissue, y = OneMinusRho, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = OneMinusRho_low, ymax = OneMinusRho_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    #y = expression(italic(d)[cor] ~ "(1 - " * rho * ")")
+    y = expression("Divergence (" * italic(d)[cor] * ")")
+  ) +
+  theme(
+    text = element_text(size = 11),
+    axis.text.x = element_text(size = 10, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+
+dE_plot_padj <- 
+ggplot(results_padj, aes(x = SexTissue, y = Euclidean, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = Euclidean_low, ymax = Euclidean_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    y = expression("Divergence (" * italic(d)[E] * ")")
+    #y = expression(italic(d[E]) ~ "(Euclidean Distance)")
+  ) +
+  theme(
+    text = element_text(size = 11),
+    axis.text.x = element_text(size = 10, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+dcor_plot_padj <- 
+ggplot(results_padj, aes(x = SexTissue, y = OneMinusRho, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = OneMinusRho_low, ymax = OneMinusRho_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    #y = expression(italic(d)[cor] ~ "(1 - " * rho * ")")
+    y = expression("Divergence (" * italic(d)[cor] * ")")
+  ) +
+  theme(
+    text = element_text(size = 11),
+    axis.text.x = element_text(size = 10, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+
+divergence_plot_suppl <- plot_grid(
+  dcor_plot_LFC, dE_plot_LFC,
+  dcor_plot_padj, dE_plot_padj,
+  ncol = 2, 
+  labels = LETTERS[1:4],
+  label_size = 18, vjust = 1
+)
+
+
+ggsave("divergence_plot_suppl.png", divergence_plot_suppl,
+      width = 6.7,
+      height = 6.7)
+
+```
+
+### Figure 3
+
+```{r}
+colors <- c(
+  "In Both Species" = "midnightblue",    
+  "In Neither Species" = "goldenrod",   
+  "In D. melanogaster Only" = "forestgreen",         
+  "In D. simulans Only" = "firebrick"             
+)
+```
+
+```{r, fig.width=7, fig.height=7}
+
+gene_counts <- gene_counts %>%
+  mutate(Type = recode(Type,
+    "OreR;OreR private" = "In D. melanogaster Only",
+    "sm21;sm21 private" = "In D. simulans Only",
+    "Shared" = "In Both Species"
+  ))
+gene_counts$Type <- factor(gene_counts$Type, levels = c("In D. melanogaster Only", "In Both Species","In D. simulans Only"))
+
+unique(gene_counts$Type)
+DEGBarplot <- ggplot(gene_counts, aes(x = SexTissue, y = Count, fill = Type)) +
+  geom_bar(stat = "identity", color = "black", width = 0.7) +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), color = "white", size = 5) +
+
+  scale_fill_manual(values = colors) +  # Use the defined color palette
+
+
+
+  labs(x = "Tissue", y = "DEG Count", fill = "DEG Type") +
+  guides(fill = guide_legend(title = NULL)) +
+  theme_minimal() +
+
+  theme(
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    #axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 16),
+    legend.text = element_text(size = 12),
+    legend.position = "top",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()
+  )
+DEGBarplot
+```
+
+### Combine DEGs and GSEA cats
+
+```{r}
+cat_counts <- readRDS("cat_counts.Rds")
+cat_counts <- cat_counts %>%
+  mutate(Type = recode(Type,
+    "OreR;OreR private" = "In D. melanogaster Only",
+    "sm21;sm21 private" = "In D. simulans Only",
+    "Shared" = "In Both Species"
+  ))
+
+cat_counts$Type <- factor(cat_counts$Type, levels = c("In D. melanogaster Only", "In Both Species","In D. simulans Only"))
+
+GSEABarplot <- ggplot(cat_counts, aes(x = SexTissue, y = Count, fill = Type)) +
+  geom_bar(stat = "identity", color = "black", width = 0.7) +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), color = "white", size = 5) +
+
+  scale_fill_manual(values = colors) +  # Use the defined color palette
+
+
+
+  labs(x = "Tissue", y = "DEG Count", fill = "DEG Type") +
+  guides(fill = guide_legend(title = NULL)) +
+  theme_minimal() +
+
+  theme(
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    #axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 16),
+    legend.text = element_text(size = 12),
+    legend.position = "top",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()
+  )
+```
+
+
+```{r}
+DEGBarplot_nolegend <- DEGBarplot + theme(legend.position = "none")
+GSEABarplot_nolegend <- GSEABarplot + theme(legend.position = "none")
+
+combined_legend <- get_legend(
+  DEGBarplot + 
+    theme(legend.position = "top",
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14))
+)
+
+two_barplots <- plot_grid(DEGBarplot_nolegend, GSEABarplot_nolegend,
+                          ncol = 2,
+                          labels = c("A", "B"),
+                          label_size = 30)
+
+final_plot <- plot_grid(two_barplots, combined_legend, 
+                        ncol = 1,  # stacked vertically
+                        rel_heights = c(1, 0.1))  # adjust legend height
+
+ggsave("barplotsFig3.pdf", plot = final_plot, width = 11, height = 7, dpi = 300)
+
+```
+
+## Save results into an Supplementary Table
+
+```{r}
+library(openxlsx)
+
+write.xlsx(
+  list(
+    "Female_Head_D.mel"    = res_fh_RvsC_OO,
+    "Female_Head_D.sim"    = res_fh_RvsC_SS,
+    "Male_Head_D.mel"      = res_mh_RvsC_OO,
+    "Male_Head_D.sim"      = res_mh_RvsC_SS,
+    
+    "Female_Thorax_D.mel"    = res_ft_RvsC_OO,
+    "Female_Thorax_D.sim"    = res_ft_RvsC_SS,
+    "Male_Thorax_D.mel"      = res_mt_RvsC_OO,
+    "Male_Thorax_D.sim"      = res_mt_RvsC_SS,
+    
+    "Female_Abdomen_D.mel"    = res_fa_RvsC_OO,
+    "Female_Abdomen_D.sim"    = res_fa_RvsC_SS,
+    "Male_Abdomen_D.mel"      = res_ma_RvsC_OO,
+    "Male_Abdomen_D.sim"      = res_ma_RvsC_SS
+  
+  ),
+  file = "rapamycin_first_order_effects.xlsx",
+  overwrite = TRUE
+)
+
+```
+
+
+```{r session_info}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`

@@ -1,0 +1,1315 @@
+---
+title: "D. melanogaster/ D. simulans expression analysis: Rapa x Species Interaction Effects"
+output:
+  html_document:
+    toc: true
+params:
+   FDR: 0.05
+   LFC: 0.0
+date: "2024-05-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+set.seed(1234)
+```
+
+## Load packages.
+
+This document depends on the following packages:
+```{r, message=FALSE, warning = FALSE}
+library(tidyverse)
+library(DESeq2)
+library(apeglm)
+library(eulerr)
+library(EnhancedVolcano)
+library(flybaseR)
+library(drosophila2.db)
+library("org.Dm.eg.db")
+library(AnnotationDbi)
+library(repr)
+library(vsn)
+library(pheatmap)
+library(clusterProfiler)
+library(DEGreport)
+source("FBidsTOSymbol.R")
+source("mito_genes.R")
+library("RNAseqQC")
+library("ensembldb")
+library("dplyr")
+library("ggplot2")
+library("purrr")
+library("tidyr")
+library("tibble")
+library("magrittr")
+library(simplifyEnrichment)
+library("fgsea")
+library(stats)
+library(msigdbr)
+library(GO.db)
+library(ggridges)
+library(enrichplot)
+library(ggupset)
+library(UpSetR)
+library(rrvgo)
+library("IHW")
+library(patchwork)
+library("RcisTarget")
+library(data.table)
+source("FBidsTOSymbol.R")
+library("introdataviz")
+```
+
+### Go annotations set up
+
+```{r set up GO annotations}
+orgDb=org.Dm.eg.db
+columns(orgDb)
+
+all_flybase_ids <- keys(orgDb, keytype = "FLYBASE")
+
+go_annotations <- select(orgDb, keys = all_flybase_ids, columns = c("FLYBASE", "GO"), keytype = "FLYBASE")
+# kegg_annotations <- select(orgDb, keys = all_flybase_ids, columns = c("FLYBASE", "PATH"), keytype = "FLYBASE")
+# kegg_annotations <- na.omit(kegg_annotations)
+
+go_annotations <- go_annotations %>% 
+  dplyr::filter(ONTOLOGY=="BP")
+
+go_annotations <- go_annotations[, c("GO","FLYBASE")]
+go_annotations <- na.omit(go_annotations)
+
+go_annotations$TERM <- select(GO.db, keys = go_annotations$GO, columns = "TERM", keytype = "GOID")$TERM
+go_annotations <- go_annotations[, c("TERM", "FLYBASE", "GO")]
+
+go_annotations$NAME <- paste(go_annotations$GO, go_annotations$TERM, sep=" ")
+go_annotations <- go_annotations[,c("NAME","FLYBASE")]
+```
+
+## Female Heads
+
+```{r subset count data to female heads}
+gene_universe_fh <- readLines("universe/gene_universe_fh.txt")
+go_annotations_fh <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_fh)
+```
+
+### Rapa x Mito Interaction
+
+```{r make a new DESeqDataSet for female heads RT interaction}
+
+fhi <- readRDS("species_by_treatment/fhi.Rds") 
+summary(fhi)
+fhi_Ordered <- fhi[order(fhi$pvalue),]
+fhi_Sig <- subset(fhi_Ordered, padj < FDR.Thresh) #507 gene
+dim(fhi_Sig)
+write.csv(fhi_Sig, "results/Female_Head/fh_sp_rapa.csv")
+gc()
+
+fhvolc <- EnhancedVolcano(fhi,
+                          lab = convertFBids(rownames(fhi)),
+                          x = 'log2FoldChange',
+                          y = 'pvalue',
+                          title = 'Species x Treatment: Female Head',
+                          legendPosition = 'bottom',
+                          legendLabSize = 12,
+                          legendIconSize = 4.0
+                          )
+
+
+```
+
+
+## Female Thorax
+
+```{r subset count data to female thorax}
+gene_universe_ft <- readLines("universe/gene_universe_ft.txt")
+go_annotations_ft <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_ft)
+```
+
+### Rapa x Mito Interaction
+
+```{r make a new DESeqDataSet for female thorax RT interaction}
+
+fti <- readRDS("species_by_treatment/fti.Rds") 
+summary(fti)
+
+fti_Ordered <- fti[order(fti$pvalue),]
+fti_Sig <- subset(fti_Ordered, padj < FDR.Thresh) #467 genes
+dim(fti_Sig)
+write.csv(fti_Sig, "results/Female_Thorax/ft_sp_rapa.csv")
+gc()
+
+ftvolc <- EnhancedVolcano(fti,
+                          lab = convertFBids(rownames(fti)),
+                          x = 'log2FoldChange',
+                          y = 'pvalue',
+                          title = 'Species x Treatment: Female Thorax',
+                          legendPosition = 'bottom',
+                          legendLabSize = 12,
+                          legendIconSize = 4.0
+                          )
+```
+
+## Female Abdomen
+
+```{r subset count data to female abdomen}
+gene_universe_fa <- readLines("universe/gene_universe_fa.txt")
+go_annotations_fa <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_fa)
+```
+
+### Rapa x Mito Interaction
+
+```{r make a new DESeqDataSet for female abdomen RT interaction}
+
+fai <- readRDS("species_by_treatment/fai.Rds") 
+summary(fai)
+
+fai_Ordered <- fai[order(fai$pvalue),]
+fai_Sig <- subset(fai_Ordered, padj < FDR.Thresh) #430 genes
+dim(fai_Sig)
+write.csv(fai_Sig, "results/Female_Abdomen/fa_sp_rapa.csv")
+gc()
+
+favolc <- EnhancedVolcano(fai,
+                          lab = convertFBids(rownames(fai)),
+                          x = 'log2FoldChange',
+                          y = 'pvalue',
+                          title = 'Species x Treatment: Female Abdomen',
+                          legendPosition = 'bottom',
+                          legendLabSize = 12,
+                          legendIconSize = 4.0
+                          )
+```
+
+## Male Heads
+
+```{r subset count data to male heads}
+gene_universe_mh <- readLines("universe/gene_universe_mh.txt")
+go_annotations_mh <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_mh)
+```
+
+### Rapa x Mito Interaction
+
+```{r make a new DESeqDataSet for male heads RT interaction}
+
+mhi <- readRDS("species_by_treatment/mhi.Rds") 
+summary(mhi)
+
+mhi_Ordered <- mhi[order(mhi$pvalue),]
+mhi_Sig <- subset(mhi_Ordered, padj < FDR.Thresh) #555 gene
+dim(mhi_Sig)
+write.csv(mhi_Sig, "results/Male_Head/mh_sp_rapa.csv")
+gc()
+
+mhvolc <- EnhancedVolcano(mhi,
+                          lab = convertFBids(rownames(mhi)),
+                          x = 'log2FoldChange',
+                          y = 'pvalue',
+                          title = 'Species x Treatment: Male Head',
+                          legendPosition = 'bottom',
+                          legendLabSize = 12,
+                          legendIconSize = 4.0
+                          )
+```
+
+## Male Thorax
+
+```{r subset count data to male thorax}
+gene_universe_mt <- readLines("universe/gene_universe_mt.txt")
+go_annotations_mt <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_mt)
+```
+
+### Rapa x Mito Interaction
+
+```{r make a new DESeqDataSet for male thorax RT interaction}
+
+mti <- readRDS("species_by_treatment/mti.Rds") 
+summary(mti)
+
+
+mti_Ordered <- mti[order(mti$pvalue),]
+mti_Sig <- subset(mti_Ordered, padj < FDR.Thresh) #59 genes
+
+mtvolc <- EnhancedVolcano(mti,
+                          lab = convertFBids(rownames(mti)),
+                          x = 'log2FoldChange',
+                          y = 'pvalue',
+                          title = 'Species x Treatment: Male Thorax',
+                          legendPosition = 'bottom',
+                          legendLabSize = 12,
+                          legendIconSize = 4.0
+                          )
+
+
+mtvolc
+
+```
+
+## Male Abdomen
+
+```{r subset count data to male abdomen}
+gene_universe_ma <- readLines("universe/gene_universe_ma.txt")
+go_annotations_ma <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_ma)
+```
+
+### Rapa x Mito Interaction
+
+```{r make a new DESeqDataSet for Male abdomen RT interaction}
+
+mai <- readRDS("species_by_treatment/mai.Rds") 
+summary(mai)
+
+mai_Ordered <- mai[order(mai$pvalue),]
+mai_Sig <- subset(mai_Ordered, padj < FDR.Thresh) #557 genes
+dim(mai_Sig)
+write.csv(mai_Sig, "results/Male_Abdomen/ma_sp_rapa.csv")
+gc()
+
+mavolc <- EnhancedVolcano(mai,
+                          lab = convertFBids(rownames(mai)),
+                          x = 'log2FoldChange',
+                          y = 'pvalue',
+                          title = 'Species x Treatment: Male Abdomen',
+                          legendPosition = 'bottom',
+                          legendLabSize = 12,
+                          legendIconSize = 4.0
+                          )
+
+mai_Sig_Df <- as.data.frame(mai_Sig) %>%
+  mutate(Effect=ifelse(log2FoldChange>0, "Positive", "Negative")) %>%
+  mutate(log2FC_mirrored = ifelse(Effect == "Negative", -log2FoldChange, log2FoldChange))
+
+```
+
+### Barplot 
+
+```{r}
+lengths_int <- sapply(interax_ef_split, function(df) length(df))
+
+gene_counts_int <- data.frame(Sample = names(lengths_int), GeneCount = lengths_int) %>%
+  mutate(Tissue = sapply(strsplit(.$Sample, '\\.'), function(x) x[1])) %>%
+  mutate(Sex = sapply(strsplit(.$Sample, '\\.'), function(x) x[2])) %>%
+  mutate(Sign = sapply(strsplit(.$Sample, '\\.'), function(x) x[3])) %>%
+
+  mutate(Sign = ifelse(Sign=="+", "Positive", "Negative"))%>%
+  mutate(Sample = gsub('\\.', "\n", .$Sample))
+                         
+gene_counts_int 
+gene_counts_int$vjust_label <- ifelse(gene_counts_int$Tissue == "Male\nThorax" & gene_counts_int$Sign == "-", -0.5, 0.5)
+
+colors <- c("Positive" = "#a6d854",  
+            "Negative" = "#b07aa1")  
+
+
+gene_counts_int$Tissue<- factor(gene_counts_int$Tissue, levels = c("Head","Thorax","Abdomen"))
+Barplot2 <-   ggplot(gene_counts_int, aes(x = interaction(Sex, Tissue, sep = "\n"), y = GeneCount, fill = Sign)) +
+  geom_bar(stat = "identity", color = "black", width = 0.7) +
+  geom_text(aes(label = GeneCount), position = position_stack(vjust = 0.5), color = "black", size = 5) +
+  scale_fill_manual(values = colors) +  # Use the defined color palette
+  labs(y = "DEG Count", fill = "Additional Effect Of Rapamycin In D.simulans") +
+  #guides(fill = guide_legend(title = NULL)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    #axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 16),
+    legend.text = element_text(size = 11),
+    legend.position = "top",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()
+  )
+
+ggsave("Barplot_interaction.pdf", plot = Barplot2, width = 6, height = 4, dpi = 600)
+```
+
+### GSEA
+
+#### Female Head
+
+```{r, fhi GSEA}
+res_fhi <- as.data.frame(fhi)
+res_fhi <- res_fhi %>% dplyr::filter(!is.na(padj))
+
+genes_fhi_ranked <- res_fhi$stat
+names(genes_fhi_ranked) <- row.names(res_fhi)
+
+
+max_ranking <- max(genes_fhi_ranked[is.finite(genes_fhi_ranked)])
+min_ranking <- min(genes_fhi_ranked[is.finite(genes_fhi_ranked)])
+
+genes_fhi_ranked <- sort(genes_fhi_ranked, decreasing = TRUE) # sort genes by ranking
+
+gse_fhi <- GSEA(genes_fhi_ranked, TERM2GENE = go_annotations_fh, eps=1e-300, pvalueCutoff=1.0)
+gse_fhi_df <- as.data.frame(gse_fhi) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "supressed"))
+
+
+gse_fhi_df_sig <- gse_fhi_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)
+
+
+
+go_terms_fh <- sapply(strsplit(gse_fhi_df_sig$ID, " "), `[`, 1)
+
+scores_fh <- -log10(gse_fhi_df_sig$p.adjust)
+names(scores_fh) <- go_terms_fh
+
+simMatrix_fh <- calculateSimMatrix(
+  go_terms_fh,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_fh <- reduceSimMatrix(
+  simMatrix_fh,
+  scores_fh,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+treemap_fh <- treemapPlot(reducedTerms_fh)
+treemap_fh
+
+scatterPlot(simMatrix_fh, reducedTerms_fh)
+```
+```{r}
+go_terms_fh <- sapply(
+  strsplit(gse_fhi_df_sig[gse_fhi_df_sig$NES > 0, "ID"], " "),
+  `[`,
+  1
+)
+
+scores_fh <- -log10(gse_fhi_df_sig$p.adjust)
+names(scores_fh) <- go_terms_fh
+
+simMatrix_fh <- calculateSimMatrix(
+  go_terms_fh,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_fh <- reduceSimMatrix(
+  simMatrix_fh,
+  scores_fh,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+
+treemapPlot(reducedTerms_fh)
+
+
+go_terms_fh <- sapply(
+  strsplit(gse_fhi_df_sig[gse_fhi_df_sig$NES < 0, "ID"], " "),
+  `[`,
+  1
+)
+
+scores_fh <- -log10(gse_fhi_df_sig$p.adjust)
+names(scores_fh) <- go_terms_fh
+
+simMatrix_fh <- calculateSimMatrix(
+  go_terms_fh,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_fh <- reduceSimMatrix(
+  simMatrix_fh,
+  scores_fh,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+
+treemapPlot(reducedTerms_fh)
+```
+
+```{r, fhi nes plot}
+fhi_gsea_plot_nes <- gse_fhi_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  slice_min(p.adjust, n=20)%>%
+  #group_by(Effect) %>%
+  #slice_min(p.adjust, n = 10) %>%
+  #ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 35)) %>%
+  mutate(Direction = if_else(Effect == 'supressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, -p.adjust), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR",
+       title = "Female Head") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) 
+fhi_gsea_plot_nes
+ggsave("results/GSEA/fhi_gsea_plot_nes.pdf", plot = fhi_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+
+
+```
+#### Core enrichment genes
+
+```{r}
+gse_fhi_df_activated <- gse_fhi_df %>%
+  dplyr::filter(NES > 0)
+
+
+core_lists <- strsplit(gse_fhi_df_sig$core_enrichment, split = "/")
+names(core_lists) <- gse_fhi_df_sig$ID   # Or gse_fhi_df$Description if you prefer
+
+core_genes_fh <- core_lists%>%unlist() %>% unique()
+```
+
+
+#### Female Thorax
+
+```{r, fti GSEA}
+res_fti <- as.data.frame(fti)
+res_fti <- res_fti %>% dplyr::filter(!is.na(padj))
+
+genes_fti_ranked <- res_fti$stat
+names(genes_fti_ranked) <- row.names(res_fti)
+
+
+max_ranking <- max(genes_fti_ranked[is.finite(genes_fti_ranked)])
+min_ranking <- min(genes_fti_ranked[is.finite(genes_fti_ranked)])
+
+#genes_fti_ranked <- replace(genes_fti_ranked, genes_fti_ranked > max_ranking, max_ranking * 10)
+#genes_fti_ranked <- replace(genes_fti_ranked, genes_fti_ranked < min_ranking, min_ranking * 10)
+
+genes_fti_ranked <- sort(genes_fti_ranked, decreasing = TRUE) # sort genes by ranking
+
+gse_fti <- GSEA(genes_fti_ranked, TERM2GENE = go_annotations_ft, eps=1e-300, pvalueCutoff=1.0)
+gse_fti_df <- as.data.frame(gse_fti) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "supressed"))
+
+gse_fti_df_sig <- gse_fti_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)
+
+go_terms_ft <- sapply(strsplit(gse_fti_df_sig$ID, " "), `[`, 1)
+
+scores_ft <- -log10(gse_fti_df_sig$p.adjust)
+names(scores_ft) <- go_terms_ft
+
+simMatrix_ft <- calculateSimMatrix(
+  go_terms_ft,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_ft <- reduceSimMatrix(
+  simMatrix_ft,
+  scores_ft,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+treemap_ft <- treemapPlot(reducedTerms_ft)
+treemap_ft
+scatterPlot(simMatrix_ft, reducedTerms_ft)
+
+```
+
+```{r, fti nes plot}
+fti_gsea_plot_nes <- gse_fti_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>%
+  slice_min(p.adjust, n=20)%>%
+  # group_by(Effect) %>%
+  # slice_min(p.adjust, n = 10) %>%
+  # ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 35)) %>%
+  mutate(Direction = if_else(Effect == 'supressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, -p.adjust), y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) 
+fti_gsea_plot_nes
+ggsave("results/GSEA/fti_gsea_plot_nes.pdf", plot = fti_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+```
+
+#### Female Abdomen
+
+```{r, fai GSEA}
+res_fai <- as.data.frame(fai)
+res_fai <- res_fai %>% dplyr::filter(!is.na(padj))
+
+genes_fai_ranked <- res_fai$stat
+names(genes_fai_ranked) <- row.names(res_fai)
+
+
+max_ranking <- max(genes_fai_ranked[is.finite(genes_fai_ranked)])
+min_ranking <- min(genes_fai_ranked[is.finite(genes_fai_ranked)])
+
+#genes_fai_ranked <- replace(genes_fai_ranked, genes_fai_ranked > max_ranking, max_ranking * 10)
+#genes_fai_ranked <- replace(genes_fai_ranked, genes_fai_ranked < min_ranking, min_ranking * 10)
+
+genes_fai_ranked <- sort(genes_fai_ranked, decreasing = TRUE) # sort genes by ranking
+
+gse_fai <- GSEA(genes_fai_ranked, TERM2GENE = go_annotations_fa, eps=1e-300, pvalueCutoff=1.0)
+gse_fai_df <- as.data.frame(gse_fai) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "supressed"))
+
+
+gse_fai_df_sig <- gse_fai_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)
+
+go_terms_fa <- sapply(strsplit(gse_fai_df_sig$ID, " "), `[`, 1)
+
+scores_fa <- -log10(gse_fai_df_sig$p.adjust)
+names(scores_fa) <- go_terms_fa
+
+simMatrix_fa <- calculateSimMatrix(
+  go_terms_fa,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_fa <- reduceSimMatrix(
+  simMatrix_fa,
+  scores_fa,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+treemap_fa <- treemapPlot(reducedTerms_fa)
+
+scatterPlot(simMatrix_fa, reducedTerms_fa)
+
+
+```
+
+```{r, fai nes plot}
+fai_gsea_plot_nes <- gse_fai_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  slice_min(p.adjust, n=20)%>%
+  #group_by(Effect) %>%
+  #slice_min(p.adjust, n = 10) %>%
+  #ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 35)) %>%
+  mutate(Direction = if_else(Effect == 'supressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, -p.adjust), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) 
+fai_gsea_plot_nes
+ggsave("results/GSEA/fai_gsea_plot_nes.pdf", plot = fai_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+```
+
+#### Male Head
+
+```{r, mhi GSEA}
+res_mhi <- as.data.frame(mhi)
+res_mhi <- res_mhi %>% dplyr::filter(!is.na(padj))
+
+genes_mhi_ranked <- res_mhi$stat
+names(genes_mhi_ranked) <- row.names(res_mhi)
+
+
+max_ranking <- max(genes_mhi_ranked[is.finite(genes_mhi_ranked)])
+min_ranking <- min(genes_mhi_ranked[is.finite(genes_mhi_ranked)])
+
+#genes_mhi_ranked <- replace(genes_mhi_ranked, genes_mhi_ranked > max_ranking, max_ranking * 10)
+#genes_mhi_ranked <- replace(genes_mhi_ranked, genes_mhi_ranked < min_ranking, min_ranking * 10)
+
+genes_mhi_ranked <- sort(genes_mhi_ranked, decreasing = TRUE) # sort genes by ranking
+
+gse_mhi <- GSEA(genes_mhi_ranked, TERM2GENE = go_annotations_mh, eps=1e-300, pvalueCutoff=1.0)
+gse_mhi_df <- as.data.frame(gse_mhi) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "supressed"))
+
+gse_mhi_df_sig <- gse_mhi_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)
+
+
+go_terms_mh <- sapply(strsplit(gse_mhi_df_sig$ID, " "), `[`, 1)
+
+scores_mh <- -log10(gse_mhi_df_sig$p.adjust)
+names(scores_mh) <- go_terms_mh
+
+simMatrix_mh <- calculateSimMatrix(
+  go_terms_mh,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_mh <- reduceSimMatrix(
+  simMatrix_mh,
+  scores_mh,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+treemap_mh <- treemapPlot(reducedTerms_mh)
+treemap_mh
+scatterPlot(simMatrix_mh, reducedTerms_mh)
+```
+
+```{r}
+go_terms_mh <- sapply(
+  strsplit(gse_mhi_df_sig[gse_mhi_df_sig$NES > 0, "ID"], " "),
+  `[`,
+  1
+)
+
+scores_mh <- -log10(gse_mhi_df_sig$p.adjust)
+names(scores_mh) <- go_terms_mh
+
+simMatrix_mh <- calculateSimMatrix(
+  go_terms_mh,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_mh <- reduceSimMatrix(
+  simMatrix_mh,
+  scores_mh,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+
+treemapPlot(reducedTerms_mh)
+
+
+go_terms_mh <- sapply(
+  strsplit(gse_mhi_df_sig[gse_mhi_df_sig$NES < 0, "ID"], " "),
+  `[`,
+  1
+)
+
+scores_mh <- -log10(gse_mhi_df_sig$p.adjust)
+names(scores_mh) <- go_terms_mh
+
+simMatrix_mh <- calculateSimMatrix(
+  go_terms_mh,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_mh <- reduceSimMatrix(
+  simMatrix_mh,
+  scores_mh,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+
+treemapPlot(reducedTerms_mh)
+```
+
+```{r, mhi nes plot}
+mhi_gsea_plot_nes <- gse_mhi_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  slice_min(p.adjust, n=20)%>%
+  # group_by(Effect) %>%
+  # slice_min(p.adjust, n = 10) %>%
+  # ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 35)) %>%
+  mutate(Direction = if_else(Effect == 'supressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, -p.adjust), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) 
+mhi_gsea_plot_nes
+ggsave("results/GSEA/mhi_gsea_plot_nes.pdf", plot = mhi_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+```
+
+#### Male Thorax
+
+```{r, mti GSEA}
+res_mti <- as.data.frame(mti)
+res_mti <- res_mti %>% dplyr::filter(!is.na(padj))
+
+genes_mti_ranked <- res_mti$stat
+names(genes_mti_ranked) <- row.names(res_mti)
+
+
+max_ranking <- max(genes_mti_ranked[is.finite(genes_mti_ranked)])
+min_ranking <- min(genes_mti_ranked[is.finite(genes_mti_ranked)])
+
+#genes_mti_ranked <- replace(genes_mti_ranked, genes_mti_ranked > max_ranking, max_ranking * 10)
+#genes_mti_ranked <- replace(genes_mti_ranked, genes_mti_ranked < min_ranking, min_ranking * 10)
+
+genes_mti_ranked <- sort(genes_mti_ranked, decreasing = TRUE) # sort genes by ranking
+
+gse_mti <- GSEA(genes_mti_ranked, TERM2GENE = go_annotations_mt, eps=1e-300, pvalueCutoff=1.0)
+gse_mti_df <- as.data.frame(gse_mti) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "supressed"))
+
+gse_mti_df_sig <- gse_mti_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)
+
+go_terms_mt <- sapply(strsplit(gse_mti_df_sig$ID, " "), `[`, 1)
+
+scores_mt <- -log10(gse_mti_df_sig$p.adjust)
+names(scores_mt) <- go_terms_mt
+
+simMatrix_mt <- calculateSimMatrix(
+  go_terms_mt,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_mt <- reduceSimMatrix(
+  simMatrix_mt,
+  scores_mt,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+treemap_mt <- treemapPlot(reducedTerms_mt)
+treemap_mt
+```
+
+```{r, mti nes plot}
+mti_gsea_plot_nes <- gse_mti_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  slice_min(p.adjust, n=20)%>%
+  #group_by(Effect) %>%
+  #slice_min(p.adjust, n = 10) %>%
+  # ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 35)) %>%
+  mutate(Direction = if_else(Effect == 'supressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, -p.adjust), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) 
+mti_gsea_plot_nes
+ggsave("results/GSEA/mti_gsea_plot_nes.pdf", plot = mti_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+```
+
+#### Male abdomen
+
+```{r, mai GSEA}
+res_mai <- as.data.frame(mai)
+res_mai <- res_mai %>% dplyr::filter(!is.na(padj))
+
+genes_mai_ranked <- res_mai$stat
+names(genes_mai_ranked) <- row.names(res_mai)
+
+
+max_ranking <- max(genes_mai_ranked[is.finite(genes_mai_ranked)])
+min_ranking <- min(genes_mai_ranked[is.finite(genes_mai_ranked)])
+
+genes_mai_ranked <- sort(genes_mai_ranked, decreasing = TRUE) # sort genes by ranking
+
+gse_mai <- GSEA(genes_mai_ranked, TERM2GENE = go_annotations_ma, eps=1e-300, pvalueCutoff=1.0)
+gse_mai_df <- as.data.frame(gse_mai) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "supressed"))
+
+gse_mai_df_sig <- gse_mai_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)
+
+go_terms_ma <- sapply(strsplit(gse_mai_df_sig$ID, " "), `[`, 1)
+
+scores_ma <- -log10(gse_mai_df_sig$p.adjust)
+names(scores_ma) <- go_terms_ma
+
+simMatrix_ma <- calculateSimMatrix(
+  go_terms_ma,
+  orgdb = org.Dm.eg.db,
+  ont = "BP",           # You can also use "MF" or "CC" if applicable
+  method = "Wang"
+)
+reducedTerms_ma <- reduceSimMatrix(
+  simMatrix_ma,
+  scores_ma,
+  threshold = 0.7,     # similarity threshold; lower = more reduction
+  orgdb = org.Dm.eg.db
+)
+treemap_ma <- treemapPlot(reducedTerms_ma)
+treemap_ma
+
+scatterPlot(simMatrix_ma, reducedTerms_ma)
+
+```
+
+```{r, mai nes plot}
+mai_gsea_plot_nes <- gse_mai_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  slice_min(p.adjust, n=20)%>%
+  # group_by(Effect) %>%
+  # slice_min(p.adjust, n = 10) %>%
+  # ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 35)) %>%
+  mutate(Direction = if_else(Effect == 'supressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, -p.adjust), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 16),
+    axis.title.x = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) 
+mai_gsea_plot_nes
+ggsave("results/GSEA/mai_gsea_plot_nes.pdf", plot = mai_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+```
+
+#### GSEA bar plot
+
+```{r, #1 by direction for each sex/tissue}
+FH <- c("Positive" = length(dplyr::filter(gse_fhi_df_sig, NES>0)$Description), 
+        "Negative" = length(dplyr::filter(gse_fhi_df_sig, NES<0)$Description))
+
+FA <- c("Positive" = length(dplyr::filter(gse_fai_df_sig, NES>0)$Description), 
+        "Negative" = length(dplyr::filter(gse_fai_df_sig, NES<0)$Description))
+
+FT <- c("Positive" = length(dplyr::filter(gse_fti_df_sig, NES>0)$Description), 
+        "Negative" = length(dplyr::filter(gse_fti_df_sig, NES<0)$Description))
+
+MH <- c("Positive" = length(dplyr::filter(gse_mhi_df_sig, NES>0)$Description), 
+        "Negative" = length(dplyr::filter(gse_mhi_df_sig, NES<0)$Description))
+
+MT <- c("Positive" = length(dplyr::filter(gse_mti_df_sig, NES>0)$Description), 
+        "Negative" = length(dplyr::filter(gse_mti_df_sig, NES<0)$Description))
+
+MA <- c("Positive" = length(dplyr::filter(gse_mai_df_sig, NES>0)$Description), 
+        "Negative" = length(dplyr::filter(gse_mai_df_sig, NES<0)$Description))
+
+
+cat_counts <- cbind(as.data.frame(FH),as.data.frame(FT), as.data.frame(FA),
+              as.data.frame(MH),as.data.frame(MT), as.data.frame(MA)) %>%
+  t() %>% as.data.frame() %>%
+  mutate(Sample=row.names(.))
+
+cat_counts <- pivot_longer(cat_counts, cols = all_of(c("Positive", "Negative")), names_to = "Type", values_to = "Count")
+cat_counts$Sex <- substr(cat_counts$Sample, 1,1)
+cat_counts$Tissue <- substr(cat_counts$Sample, 2,2)
+cat_counts <- cat_counts %>%
+  mutate(Sex = ifelse(Sex=="F", "Female", "Male"))
+
+cat_counts <- cat_counts %>%
+  mutate(Tissue = ifelse(Tissue=="T", "Thorax",
+                         ifelse(Tissue=="A", "Abdomen", "Head")))
+cat_counts$SexTissue <- paste(cat_counts$Sex, cat_counts$Tissue, sep = "\n")
+
+
+colors <- c("Positive" = "#a6d854",  
+            "Negative" = "#b07aa1") 
+
+
+Barplot_GSEA <- ggplot(cat_counts, aes(x = SexTissue, y = Count, fill = Type)) +
+  geom_bar(stat = "identity", color = "black", width = 0.7) +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), color = "black", size = 5) +
+  scale_fill_manual(values = colors) +  # Use the defined color palette
+  labs(y = "GSEA Count", fill = "Additional Effect Of Rapamycin In D.simulans") +
+  #guides(fill = guide_legend(title = NULL)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    #axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 16),
+    legend.text = element_text(size = 11),
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    #axis.title.y = element_blank()
+  )
+Barplot_GSEA
+```
+
+### Combined GSEA plots
+
+```{r}
+panel_labeller <- c(
+  "Female Head"    = "A: Female Head",
+  "Male Head"      = "B: Male Head",
+  "Female Thorax"  = "C: Female Thorax",
+  "Male Thorax"    = "D: Male Thorax",
+  "Female Abdomen" = "E: Female Abdomen",
+  "Male Abdomen"   = "F: Male Abdomen"
+)
+
+combined_gse_plot2 <- ggplot(
+  combined_gse_df,
+  aes(x = reorder(Description, -p.adjust), y = NES)
+) +
+  geom_segment(
+    aes(
+      x = Description,
+      xend = Description,
+      y = 0,
+      yend = NES,
+      color = p.adjust
+    ),
+    linewidth = 1.1,
+    lineend = "round",
+    alpha = 0.8
+  ) +
+  geom_point(
+    aes(fill = p.adjust, size = GeneCount),
+    shape = 21,
+    color = "black",
+    stroke = 1.1,
+    alpha = 0.9
+  ) +
+
+  facet_wrap(
+    ~Tissue,
+    scales = "free_y",
+    ncol = 2,
+    labeller = as_labeller(panel_labeller)
+  ) +
+
+  coord_flip() +
+
+  scale_color_gradient(
+    low = "#f768a1",
+    high = "#7a0177",
+    name = "FDR"
+  ) +
+  scale_fill_gradient(
+    low = "#f768a1",
+    high = "#7a0177",
+    name = "FDR"
+  ) +
+  scale_size_continuous(range = c(5, 10)) +
+
+  labs(
+    x = "Pathway",
+    y = "Normalized Enrichment Score",
+    size = "Gene Count",
+    color = "FDR"
+  ) +
+
+  theme_minimal() +
+  theme(
+
+    strip.text = element_text(
+      size = 16,
+      face = "bold",
+      hjust = 0          
+    ),
+    strip.background = element_blank(),
+    strip.placement = "outside",
+
+    panel.spacing = unit(1.6, "lines"),
+    panel.spacing.x = unit(1.3, "lines"),
+    panel.spacing.y = unit(1.8, "lines"),
+
+    panel.border = element_rect(
+      color = "black",
+      fill = NA,
+      linewidth = 1
+    ),
+
+
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 20),
+    axis.text.x = element_text(size = 14),
+    axis.title.x = element_text(size = 18),
+
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.box.just = "center",
+    legend.key.width = unit(1.5, "cm"),
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 18, hjust = 0.5)
+  ) +
+
+  guides(
+    color = guide_colorbar(
+      title.position = "top",
+      barwidth = 10,
+      nrow = 2
+    ),
+    fill = guide_colorbar(
+      title.position = "top",
+      barwidth = 10,
+      nrow = 2
+    ),
+    size = guide_legend(
+      nrow = 2,
+      title.position = "top"
+    )
+  )
+
+ggsave("results/GSEA/combined_gse_plot2.pdf", plot = combined_gse_plot2, width = 17, height = 22, dpi = 600)
+
+```
+
+## Save results into an Supplementary Tables
+
+```{r}
+library(openxlsx)
+
+write.xlsx(
+  list(
+    "Female_Head_Interaction"    = fhi,
+    "Male_Head_Interaction"    = mhi,
+
+    "Female_Thorax_Interaction"    = fti,
+    "Male_Thorax_Interaction"    = mti,
+    
+    "Female_Abdomen_Interaction"    = fai,
+    "Male_Abdomen_Interaction"    = mai
+  ),
+  file = "rapamycin_species_interaction_effects.xlsx",
+  overwrite = TRUE
+)
+
+
+write.xlsx(
+  list(
+    "Female_Head_Interaction"    = gse_fhi_df,
+    "Male_Head_Interaction"    = gse_mhi_df,
+
+    "Female_Thorax_Interaction"    = gse_fti_df,
+    "Male_Thorax_Interaction"    = gse_mti_df,
+    
+    "Female_Abdomen_Interaction"    = gse_fai_df,
+    "Male_Abdomen_Interaction"    = gse_mai_df
+  
+  ),
+  file = "GSEA_rapamycin_species_interaction.xlsx",
+  overwrite = TRUE
+)
+```
+
+```{r session_info}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`

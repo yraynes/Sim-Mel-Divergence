@@ -1,0 +1,947 @@
+---
+title: "Patterns of Transcriptional Variation Across Tissues, Sexes, and Species"
+output:
+  html_document:
+    toc: true
+params:
+   FDR: 0.05
+   LFC: 0.0
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+set.seed(1234)
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+```
+
+## Load packages.
+This document depends on the following packages:
+```{r, message=FALSE}
+library(tidyverse)
+library(DESeq2)
+library(apeglm)
+library(eulerr)
+library(EnhancedVolcano)
+library(flybaseR)
+library(drosophila2.db)
+library("org.Dm.eg.db")
+library(AnnotationDbi)
+library(repr)
+library(vsn)
+library(pheatmap)
+library(clusterProfiler)
+library(DEGreport)
+source("FBidsTOSymbol.R")
+source("mito_genes.R")
+library("RNAseqQC")
+library("ensembldb")
+library("dplyr")
+library("ggplot2")
+library("purrr")
+library("tidyr")
+library("tibble")
+library("magrittr")
+library(simplifyEnrichment)
+library("fgsea")
+library(stats)
+library(msigdbr)
+library(GO.db)
+library(ggridges)
+library(enrichplot)
+library(ggupset)
+library(UpSetR)
+library(rrvgo)
+library("IHW")
+library(patchwork)
+library(RColorBrewer)
+library("vegan")
+```
+
+## Read count tables/group info into R.
+```{r data acquisition}
+
+cts <- as.matrix(read.csv("rapa_count_table_sim_mel.csv", row.names = 1))
+cts <- subset(cts, select = -OOFCH4)
+
+gene_universe_all <- row.names(cts[rowSums(cts)>0, ])
+length(gene_universe_all)
+
+ifelse(!dir.exists("results/All_Data"), dir.create("results/All_Data", recursive=TRUE), print("directory already exists"))
+writeLines(gene_universe_all, "results/All_Data/gene_universe_ad.txt")
+
+coldata <- read.csv("rapa_group_data_sim_mel.csv", row.names = 1)
+coldata <- coldata[colnames(cts),]
+
+
+#save experimental features as factors, make a couple compund ones
+coldata$Treatment <- as.factor(coldata$Treatment)
+coldata$Tissue <- as.factor(coldata$Tissue)
+coldata$Species <- as.factor(coldata$Species)
+coldata$Group <- as.factor(coldata$Group)
+coldata$Sex <- as.factor(coldata$Sex)
+
+coldata$SpeciesTreatment <- as.factor(paste0(coldata$Species, coldata$Treatment))
+coldata$SpeciesSexTissue <- as.factor(paste0(coldata$Species, coldata$Sex, coldata$Tissue))
+
+coldata$Treatment <- relevel(coldata$Treatment, "Rapa") #make rapamycin the reference to more easily interpret fold change signs
+levels(coldata$Treatment)
+```
+
+### Split data by sex
+
+```{r female data}
+cts_f <- cts[,substring(colnames(cts),3,3)=="F"] #subset data to thorax columns
+coldata_f <- coldata[colnames(cts_f),]
+
+gene_universe_f <- row.names(cts[rowSums(cts_f)>0, ])
+length(gene_universe_f)
+```
+
+```{r male data}
+cts_m <- cts[,substring(colnames(cts),3,3)=="M"] #subset data to abdomen columns
+coldata_m <- coldata[colnames(cts_m),]
+
+gene_universe_m <- row.names(cts[rowSums(cts_m)>0, ])
+length(gene_universe_m)
+```
+
+
+### Split data by species
+
+```{r Mel data}
+cts_OO <- cts[,substring(colnames(cts),1,1)=="O"] #subset data to O
+coldata_OO <- coldata[colnames(cts_OO),]
+```
+
+```{r Sim data}
+cts_SS <- cts[,substring(colnames(cts),1,1)=="S"] #subset data to S
+coldata_SS <- coldata[colnames(cts_SS),]
+```
+
+### Split data by tissue
+
+```{r thorax data}
+cts_T <- cts[,substring(colnames(cts),5,5)=="T"] #subset data to thorax columns
+coldata_T <- coldata[colnames(cts_T),]
+
+gene_universe_T <- row.names(cts[rowSums(cts_T)>0, ])
+length(gene_universe_T)
+```
+
+```{r abdomen data}
+cts_A <- cts[,substring(colnames(cts),5,5)=="A"] #subset data to abdomen columns
+coldata_A <- coldata[colnames(cts_A),]
+
+gene_universe_A <- row.names(cts[rowSums(cts_A)>0, ])
+length(gene_universe_A)
+
+```
+
+```{r head data}
+cts_H <- cts[,substring(colnames(cts),5,5)=="H"] #subset data to head columns
+coldata_H <- coldata[colnames(cts_H),]
+
+gene_universe_H <- row.names(cts[rowSums(cts_H)>0, ])
+length(gene_universe_H)
+
+```
+
+### MDS
+
+#### All tissue MDS
+
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design = ~ Sex + Treatment + Tissue + Species)
+vst <- vst(dds, blind = TRUE)
+sampleDists <- dist(t(assay(vst))) 
+
+#dist computes the euclidean distance matrix.
+#need to transpose the matrix of values using t, because the dist function expects the different samples to be rows and different dimensions (here, genes) to be columns.
+
+sampleDistMatrix <- as.matrix(sampleDists)
+mds_dist <- cmdscale(sampleDistMatrix, k=3, eig = TRUE)
+#cmdscale: takes a set of dissimilarities (euclidean distances) and returns a set of points such that the distances between the points are approximately equal to the dissimilarities
+
+mds <- cbind(as.data.frame(colData(vst)), mds_dist$points)
+
+Dim1 <- mds_dist$eig[1]/sum(mds_dist$eig) * 100 # percentage variation explained by the first dimension (first eigenvalue)
+Dim1 <- signif(Dim1, digits = 4)
+Dim2 <- mds_dist$eig[2]/sum(mds_dist$eig) * 100 # percentage variation explained by the second dimension (second eigenvalue)
+Dim2 <- signif(Dim2, digits = 4)
+
+mds$name = paste0(mds$Group, mds$Replicate)
+mds$labels <- paste(mds$Sex, mds$Treatment, sep = " ")
+mds$TissueSpecies <- paste(mds$Tissue, mds$Species, sep = " ")
+mds$TissueTreatment <- factor(paste(mds$Tissue, mds$Treatment, sep = " "))
+mds$Species <- ifelse(mds$Species=="OO", "D. melanogaster", "D. simulans")
+```
+
+
+```{r}
+mdsplot <- ggplot(mds, aes(x = `1`, y = `2`, color = Sex, shape = Tissue, fill = Species)) +
+  geom_point(size = 4,  stroke = 1.7)+
+  coord_fixed() +
+  labs(
+    x = paste0("Dimension 1 (", Dim1, "%)"),
+    y = paste0("Dimension 2 (", Dim2, "%)"),
+    color = "Sex",
+    shape = "Tissue",
+    fill = "Species"
+  ) +
+  #scale_color_brewer(palette = "Set1") +
+  scale_shape_manual(
+    values = c(
+      "Abdomen" = 21,
+      "Head" = 22,
+      "Thorax" = 23
+    ),
+    limits = c( "Head", "Thorax", "Abdomen") 
+  ) +
+
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  scale_fill_manual(values = c("D. simulans" = "darkgrey", "D. melanogaster" = "white"), 
+                    breaks = c("D. simulans", "D. melanogaster"),  # Specify breaks for the legend
+                    labels = c("D. simulans", "D. melanogaster")) + 
+  theme_minimal() +  # Choose an appropriate theme, such as theme_minimal(), theme_classic(), etc.
+  theme(
+    legend.position = "right",  # Adjust legend position as needed
+    legend.title = element_text(size = 12),  # Increase legend title font size
+    legend.text = element_text(size = 10),  # Increase legend text font size
+    
+    plot.title = element_text(size = 14, face = "bold"),  # Increase plot title font size and make it bold
+
+    
+    axis.text.x = element_text(size = 10),  
+    axis.text.y = element_text(size = 10),  # Adjust font size for y-axis labels
+    axis.title = element_text(size = 14),  # Adjust font size for axis titles
+    plot.margin = margin(t = 0,  
+                         r = 0,  
+                         b = 0,  
+                         l = 0) 
+    
+  )+
+  guides(
+    shape = guide_legend(order = 1),  # Set the order of Tissue in legend
+    color = guide_legend(order = 2),
+    fill = guide_legend(
+    override.aes = list(
+      shape = c(21, 21),  # Use shape 21 (filled circle) 
+      color = c("#999999", "#999999"),  # Set the colors for Rapa and Control
+      fill = c("#999999", "white")  # Set the fill colors for Rapa and Control
+    ),
+    title = "Species", # Specify the legend title
+    order = 3))  
+
+mdsplot
+ggsave("mdsplot_all.png", plot = mdsplot, width = 6, height = 4, dpi = 300)
+```
+
+#### Thorax MDS
+
+```{r}
+dds_T <- DESeqDataSetFromMatrix(countData = cts_T,
+                              colData = coldata_T,
+                              design = ~ Sex + Treatment + Species)
+vst_T <- vst(dds_T, blind = TRUE)
+sampleDists <- dist(t(assay(vst_T))) 
+
+#dist computes the euclidean distance matrix.
+#need to transpose the matrix of values using t, because the dist function expects the different samples to be rows and different dimensions (here, genes) to be columns.
+
+sampleDistMatrix <- as.matrix(sampleDists)
+mds_dist <- cmdscale(sampleDistMatrix, eig = TRUE)
+#cmdscale: takes a set of dissimilarities (euclidean distances) and returns a set of points such that the distances between the points are approximately equal to the dissimilarities
+
+#mds1 <- cbind(as.data.frame(colData(vst_T)), cmdscale(sampleDistMatrix))
+mds <- cbind(as.data.frame(colData(vst_T)), mds_dist$points)
+
+Dim1 <- mds_dist$eig[1]/sum(mds_dist$eig) * 100 # percentage variation explained by the first dimension (first eigenvalue)
+Dim1 <- signif(Dim1, digits = 4)
+Dim2 <- mds_dist$eig[2]/sum(mds_dist$eig) * 100 # percentage variation explained by the second dimension (second eigenvalue)
+Dim2 <- signif(Dim2, digits = 4)
+
+mds$name = paste0(mds$Group, mds$Replicate)
+```
+
+```{r}
+thorax_mds_plt <- ggplot(mds, aes(x = `1`, y = `2`, color = Sex, shape = Treatment, fill = Species)) +
+  geom_point(size = 4,  stroke = 1.5)+
+  coord_fixed() +
+  labs(
+    x = paste0("Dimension 1 (", Dim1, "%)"),
+    y = paste0("Dimension 2 (", Dim2, "%)"),
+    color = "Sex",
+    shape = "Treatment",
+    fill = "Species"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Control" = 24,
+      "Rapa" = 25
+    ),
+    limits = c( "Control", "Rapa"),
+    labels = c("Control", "Rapamycin")
+  ) +
+
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "cyan4")) +
+  scale_fill_manual(values = c("SS" = "darkgrey", "OO" = "white"), 
+                    breaks = c("SS", "OO"),  # Specify breaks for the legend
+                    labels = c("Simulans", "Melanogaster")) + 
+  theme_minimal() +  
+  theme(
+    legend.position = "right",  
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10), 
+    
+    plot.title = element_text(size = 14, face = "bold"),  
+
+    
+    axis.text.x = element_text(size = 10),  
+    axis.text.y = element_text(size = 10),  
+    axis.title = element_text(size = 14),
+    
+        plot.margin = margin(t = 0,  # Top margin
+                             r = 0,  # Right margin
+                             b = 0,  # Bottom margin
+                             l = 0) # Left margin
+   
+    
+  )+ 
+  ggtitle("Thorax") +
+  
+  guides(
+    shape = guide_legend(order = 2),  # Set the order of mtDNA in legend
+    color = guide_legend(order = 1),
+    fill = guide_legend(
+    override.aes = list(
+      shape = c(21, 21),  # Use shape 21 (filled circle) 
+      color = c("#999999", "#999999"),  # Set the colors for sm21 and oreR
+      fill = c("#999999", "white")  # Set the fill colors for sm21 and oreR
+    ),
+    title = "Species", # Specify the legend title
+    order = 3))  
+
+thorax_mds_plt
+ggsave("mdsplot_thorax.png", plot = thorax_mds_plt, width = 7, height = 8, dpi = 300)
+
+```
+
+
+#### Abdomen MDS
+
+```{r}
+dds_A <- DESeqDataSetFromMatrix(countData = cts_A,
+                              colData = coldata_A,
+                              design = ~ Sex + Treatment + Species)
+vst_A <- vst(dds_A, blind = TRUE)
+sampleDists <- dist(t(assay(vst_A))) 
+
+#dist computes the euclidean distance matrix.
+#need to transpose the matrix of values using t, because the dist function expects the different samples to be rows and different dimensions (here, genes) to be columns.
+
+sampleDistMatrix <- as.matrix(sampleDists)
+mds_dist <- cmdscale(sampleDistMatrix, eig = TRUE)
+#cmdscale: takes a set of dissimilarities (euclidean distances) and returns a set of points such that the distances between the points are approximately equal to the dissimilarities
+
+mds <- cbind(as.data.frame(colData(vst_A)), mds_dist$points)
+
+Dim1 <- mds_dist$eig[1]/sum(mds_dist$eig) * 100 # percentage variation explained by the first dimension (first eigenvalue)
+Dim1 <- signif(Dim1, digits = 4)
+Dim2 <- mds_dist$eig[2]/sum(mds_dist$eig) * 100 # percentage variation explained by the second dimension (second eigenvalue)
+Dim2 <- signif(Dim2, digits = 4)
+
+mds$name = paste0(mds$Group, mds$Replicate)
+```
+
+```{r}
+abdomen_mds_plt <- ggplot(mds, aes(x = `1`, y = `2`, color = Sex, shape = Treatment, fill = Species)) +
+  geom_point(size = 4,  stroke = 1.5)+
+  coord_fixed() +
+  labs(
+    x = paste0("Dimension 1 (", Dim1, "%)"),
+    y = paste0("Dimension 2 (", Dim2, "%)"),
+    color = "Sex",
+    shape = "Treatment",
+    fill = "Species"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Control" = 24,
+      "Rapa" = 25
+    ),
+    limits = c( "Control", "Rapa"),
+    labels = c("Control", "Rapamycin")
+  ) +
+
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "cyan4")) +
+  scale_fill_manual(values = c("SS" = "darkgrey", "OO" = "white"), 
+                    breaks = c("SS", "OO"),  # Specify breaks for the legend
+                    labels = c("Simulans", "Melanogaster")) + 
+  theme_minimal() +  
+  theme(
+    legend.position = "right",  
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10), 
+    
+    plot.title = element_text(size = 14, face = "bold"),  
+
+    
+    axis.text.x = element_text(size = 10),  
+    axis.text.y = element_text(size = 10),  
+    axis.title = element_text(size = 14),  
+    plot.margin = grid::unit(c(0, 0, 0, 0), "pt")
+    
+  )+
+  ggtitle("Abdomen") +
+  guides(
+    shape = guide_legend(order = 2, nrow=2),  # Set the order of mtDNA in legend
+    color = guide_legend(order = 1, nrow=2),
+    fill = guide_legend(nrow=2,
+    override.aes = list(
+      shape = c(21, 21),  # Use shape 21 (filled circle) 
+      color = c("#999999", "#999999"),  # Set the colors for sm21 and oreR
+      fill = c("#999999", "white")  # Set the fill colors for sm21 and oreR
+    ),
+    title = "Species", # Specify the legend title
+    order = 3))  
+
+abdomen_mds_plt
+ggsave("mdsplot_abdomen.png", plot = abdomen_mds_plt, width = 7, height = 8, dpi = 300)
+
+```
+
+
+#### Head MDS
+
+```{r}
+dds_H <- DESeqDataSetFromMatrix(countData = cts_H,
+                              colData = coldata_H,
+                              design = ~ Sex + Treatment + Species)
+vst_H <- vst(dds_H, blind = TRUE)
+sampleDists <- dist(t(assay(vst_H))) 
+
+#dist computes the euclidean distance matrix.
+#need to transpose the matrix of values using t, because the dist function expects the different samples to be rows and different dimensions (here, genes) to be columns.
+
+sampleDistMatrix <- as.matrix(sampleDists)
+mds_dist <- cmdscale(sampleDistMatrix, eig = TRUE)
+#cmdscale: takes a set of dissimilarities (euclidean distances) and returns a set of points such that the distances between the points are approximately equal to the dissimilarities
+
+#mds1 <- cbind(as.data.frame(colData(vst_H)), cmdscale(sampleDistMatrix))
+mds <- cbind(as.data.frame(colData(vst_H)), mds_dist$points)
+
+Dim1 <- mds_dist$eig[1]/sum(mds_dist$eig) * 100 # percentage variation explained by the first dimension (first eigenvalue)
+Dim1 <- signif(Dim1, digits = 4)
+Dim2 <- mds_dist$eig[2]/sum(mds_dist$eig) * 100 # percentage variation explained by the second dimension (second eigenvalue)
+Dim2 <- signif(Dim2, digits = 4)
+
+mds$name = paste0(mds$Group, mds$Replicate)
+```
+
+```{r}
+head_mds_plt <- ggplot(mds, aes(x = `1`, y = `2`, color = Sex, shape = Treatment, fill = Species)) +
+  geom_point(size = 4,  stroke = 1.5)+
+  coord_fixed() +
+  labs(
+    x = paste0("Dimension 1 (", Dim1, "%)"),
+    y = paste0("Dimension 2 (", Dim2, "%)"),
+    color = "Sex",
+    shape = "Treatment",
+    fill = "Species"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Control" = 24,
+      "Rapa" = 25
+    ),
+    limits = c( "Control", "Rapa"),
+    labels = c("Control", "Rapamycin")
+  ) +
+
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "cyan4")) +
+  scale_fill_manual(values = c("SS" = "darkgrey", "OO" = "white"), 
+                    breaks = c("SS", "OO"),  # Specify breaks for the legend
+                    labels = c("Simulans", "Melanogaster")) + 
+  theme_minimal() +  
+  theme(
+    legend.position = "right",  
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10), 
+    
+    plot.title = element_text(size = 14, face = "bold"),  
+
+    
+    axis.text.x = element_text(size = 10),  
+    axis.text.y = element_text(size = 10),  
+    axis.title = element_text(size = 14),  
+   plot.margin = grid::unit(c(0, 0, 0, 0), "pt")
+    
+  )+
+  ggtitle("Head") +
+  guides(
+    shape = guide_legend(order = 2),  # Set the order of mtDNA in legend
+    color = guide_legend(order = 1),
+    fill = guide_legend(
+    override.aes = list(
+      shape = c(21, 21),  # Use shape 21 (filled circle) 
+      color = c("#999999", "#999999"),  # Set the colors for sm21 and oreR
+      fill = c("#999999", "white")  # Set the fill colors for sm21 and oreR
+    ),
+    title = "Species", # Specify the legend title
+    order = 3))  
+
+head_mds_plt
+ggsave("mdsplot_head.png", plot = head_mds_plt, width = 7, height = 8, dpi = 300)
+
+```
+
+#### Female MDS
+
+```{r}
+dds_f <- DESeqDataSetFromMatrix(countData = cts_f,
+                              colData = coldata_f,
+                              design = ~ Tissue + Treatment + Species)
+vst_f <- vst(dds_f, blind = TRUE)
+sampleDists <- dist(t(assay(vst_f))) 
+
+#dist computes the euclidean distance matrix.
+#need to transpose the matrix of values using t, because the dist function expects the different samples to be rows and different dimensions (here, genes) to be columns.
+
+sampleDistMatrix <- as.matrix(sampleDists)
+mds_dist <- cmdscale(sampleDistMatrix, eig = TRUE)
+#cmdscale: takes a set of dissimilarities (euclidean distances) and returns a set of points such that the distances between the points are approximately equal to the dissimilarities
+
+#mds1 <- cbind(as.data.frame(colData(vst_f)), cmdscale(sampleDistMatrix))
+mds <- cbind(as.data.frame(colData(vst_f)), mds_dist$points)
+
+Dim1 <- mds_dist$eig[1]/sum(mds_dist$eig) * 100 # percentage variation explained by the first dimension (first eigenvalue)
+Dim1 <- signif(Dim1, digits = 4)
+Dim2 <- mds_dist$eig[2]/sum(mds_dist$eig) * 100 # percentage variation explained by the second dimension (second eigenvalue)
+Dim2 <- signif(Dim2, digits = 4)
+
+mds$name = paste0(mds$Group, mds$Replicate)
+```
+
+```{r}
+female_mds_plt <- ggplot(mds, aes(x = `1`, y = `2`, color = Tissue, shape = Treatment, fill = Species)) +
+  geom_point(size = 4,  stroke = 1.5)+
+  coord_fixed() +
+  labs(
+    x = paste0("Dimension 1 (", Dim1, "%)"),
+    y = paste0("Dimension 2 (", Dim2, "%)"),
+    color = "Tissue",
+    shape = "Treatment",
+    fill = "Species"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Control" = 21,
+      "Rapa" = 22
+    ),
+    limits = c( "Control", "Rapa"),
+    labels = c("Control", "Rapamycin")
+  ) +
+
+  scale_color_manual(values = c("Abdomen" = "salmon", "Thorax" = "cyan4", "Head" = "purple")) +
+  scale_fill_manual(values = c("SS" = "darkgrey", "OO" = "white"), 
+                    breaks = c("SS", "OO"),  # Specify breaks for the legend
+                    labels = c("Simulans", "Melanogaster")) + 
+  theme_minimal() +  
+  theme(
+    legend.position = "right",  
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10), 
+    
+    plot.title = element_text(size = 14, face = "bold"),  
+
+    
+    axis.text.x = element_text(size = 10),  
+    axis.text.y = element_text(size = 10),  
+    axis.title = element_text(size = 14),  
+   
+    
+  )+
+  guides(
+    shape = guide_legend(order = 2),  # Set the order of mtDNA in legend
+    color = guide_legend(order = 1),
+    fill = guide_legend(
+    override.aes = list(
+      shape = c(21, 21),  # Use shape 21 (filled circle) 
+      color = c("#999999", "#999999"),  # Set the colors for sm21 and oreR
+      fill = c("#999999", "white")  # Set the fill colors for sm21 and oreR
+    ),
+    title = "Species", # Specify the legend title
+    order = 3))  
+
+female_mds_plt
+ggsave("mdsplot_female.png", plot = female_mds_plt, width = 7, height = 8, dpi = 300)
+
+```
+
+#### Male MDS
+
+```{r}
+dds_m <- DESeqDataSetFromMatrix(countData = cts_m,
+                              colData = coldata_m,
+                              design = ~ Tissue + Treatment + Species)
+vst_m <- vst(dds_m, blind = TRUE)
+sampleDists <- dist(t(assay(vst_m))) 
+
+#dist computes the euclidean distance matrix.
+#need to transpose the matrix of values using t, because the dist function expects the different samples to be rows and different dimensions (here, genes) to be columns.
+
+sampleDistMatrix <- as.matrix(sampleDists)
+
+
+mds_dist <- cmdscale(sampleDistMatrix, eig = TRUE)
+#cmdscale: takes a set of dissimilarities (euclidean distances) and returns a set of points such that the distances between the points are approximately equal to the dissimilarities
+
+#mds1 <- cbind(as.data.frame(colData(vst_m)), cmdscale(sampleDistMatrix))
+mds <- cbind(as.data.frame(colData(vst_m)), mds_dist$points)
+
+Dim1 <- mds_dist$eig[1]/sum(mds_dist$eig) * 100 # percentage variation explained by the first dimension (first eigenvalue)
+Dim1 <- signif(Dim1, digits = 4)
+Dim2 <- mds_dist$eig[2]/sum(mds_dist$eig) * 100 # percentage variation explained by the second dimension (second eigenvalue)
+Dim2 <- signif(Dim2, digits = 4)
+
+mds$name = paste0(mds$Group, mds$Replicate)
+```
+
+```{r}
+male_mds_plt <- ggplot(mds, aes(x = `1`, y = `2`, color = Tissue, shape = Treatment, fill = Species)) +
+  geom_point(size = 4,  stroke = 1.5)+
+  coord_fixed() +
+  labs(
+    x = paste0("Dimension 1 (", Dim1, "%)"),
+    y = paste0("Dimension 2 (", Dim2, "%)"),
+    color = "Tissue",
+    shape = "Treatment",
+    fill = "Species"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Control" = 21,
+      "Rapa" = 22
+    ),
+    limits = c( "Control", "Rapa"),
+    labels = c("Control", "Rapamycin")
+  ) +
+
+  scale_color_manual(values = c("Abdomen" = "salmon", "Thorax" = "cyan4", "Head" = "purple")) +
+  scale_fill_manual(values = c("SS" = "darkgrey", "OO" = "white"), 
+                    breaks = c("SS", "OO"),  # Specify breaks for the legend
+                    labels = c("Simulans", "Melanogaster")) + 
+  theme_minimal() +  
+  theme(
+    legend.position = "none",  
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10), 
+    
+    plot.title = element_text(size = 14, face = "bold"),  
+
+    
+    axis.text.x = element_text(size = 10),  
+    axis.text.y = element_text(size = 10),  
+    axis.title = element_text(size = 14),  
+   
+    
+  )+
+  guides(
+    shape = guide_legend(order = 2),  # Set the order of mtDNA in legend
+    color = guide_legend(order = 1),
+    fill = guide_legend(
+    override.aes = list(
+      shape = c(21, 21),  # Use shape 21 (filled circle) 
+      color = c("#999999", "#999999"),  # Set the colors for sm21 and oreR
+      fill = c("#999999", "white")  # Set the fill colors for sm21 and oreR
+    ),
+    title = "Species", # Specify the legend title
+    order = 3))  
+
+male_mds_plt
+ggsave("mdsplot_male.png", plot = male_mds_plt, width = 7, height = 8, dpi = 300)
+
+male_mds_plt/female_mds_plt
+```
+
+
+
+#### Tissue MDS
+
+```{r}
+thorax_mds_plt <- thorax_mds_plt+ theme(legend.position = "none")
+head_mds_plt <- head_mds_plt+ theme(legend.position = "none")
+abdomen_mds_plt <- abdomen_mds_plt+ theme(legend.position = "bottom")
+
+
+combinedMDS <- plot_grid(
+  thorax_mds_plt, head_mds_plt,
+  abdomen_mds_plt,
+  ncol = 1, 
+  labels = LETTERS[1:3],
+  label_size = 18, 
+  vjust = 1,
+  align = "v",
+  axis = "lr",
+  rel_heights = c(1, 1, 1.2),
+  rel_widths = c(1,1,1)
+)
+
+ggsave("tissuesMDS.png", plot = combinedMDS,
+, width = 6, height = 9, dpi = 300)
+
+
+
+
+female_mds_plt <- female_mds_plt+ggtitle("females")
+male_mds_plt <- male_mds_plt+ggtitle("males")
+ggsave("sexMDS.png", plot = female_mds_plt/male_mds_plt
+, width = 8, height = 16, dpi = 300)
+```
+
+### Distance Heatmaps
+
+#### Females
+
+```{r}
+df <- as.data.frame(assay(vst_f))
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+df_filtered <- df %>%
+  dplyr::select(which(substr(names(df), 4, 4) == "C"))
+
+colnames(df_filtered) <- paste(ifelse(substr(names(df_filtered), 1, 2)=="SS", "Sim", "Mel"), substr(names(df_filtered), 5, 5), sep="-")
+
+
+
+df_filtered <- as.matrix(df_filtered)
+
+femaleDists <- dist(t(df_filtered))
+
+femaleDistsMatrix <- as.matrix(femaleDists)
+
+fdis <- pheatmap(femaleDistsMatrix,
+         clustering_distance_rows=femaleDists,
+         clustering_distance_cols=femaleDists,
+         col=colors,
+         filename = "fdis_heatmap.png",
+         width=7.5,
+         height=7)
+fdis
+```
+
+```{r}
+df <- df %>%
+  mutate(OOFCA_avg = rowMeans(dplyr::select(., contains("OOFCA")), na.rm = TRUE)) %>%
+  mutate(SSFCA_avg = rowMeans(dplyr::select(., contains("SSFCA")), na.rm = TRUE)) %>%
+
+  mutate(OOFCH_avg = rowMeans(dplyr::select(., contains("OOFCH")), na.rm = TRUE)) %>%
+  mutate(SSFCH_avg = rowMeans(dplyr::select(., contains("SSFCH")), na.rm = TRUE)) %>%
+
+  mutate(OOFCT_avg = rowMeans(dplyr::select(., contains("OOFCT")), na.rm = TRUE)) %>%
+  mutate(SSFCT_avg = rowMeans(dplyr::select(., contains("SSFCT")), na.rm = TRUE)) 
+
+df_filtered <- df %>%
+  dplyr::select(which(substr(names(df), 7, 9) == "avg"))
+
+colnames(df_filtered) <- paste(ifelse(substr(names(df_filtered), 1, 2)=="SS", "D.sim", "D.mel"), 
+                               substr(names(df_filtered), 5, 5), 
+                               sep="-")
+
+
+femaleDists <- dist(t(df_filtered))
+
+femaleDistsMatrix <- as.matrix(femaleDists)
+
+fdis <- pheatmap(femaleDistsMatrix,
+         clustering_distance_rows=femaleDists,
+         clustering_distance_cols=femaleDists,
+         col=colors,
+         filename = "fdis_heatmap_C.png",
+         width=7.5,
+         height=7)
+
+```
+
+
+```{r}
+df <- df %>%
+  mutate(OOFCA_avg = rowMeans(dplyr::select(., contains("OOFCA")), na.rm = TRUE)) %>%
+  mutate(OOFRA_avg = rowMeans(dplyr::select(., contains("OOFRA")), na.rm = TRUE)) %>%
+  mutate(SSFCA_avg = rowMeans(dplyr::select(., contains("SSFCA")), na.rm = TRUE)) %>%
+  mutate(SSFRA_avg = rowMeans(dplyr::select(., contains("SSFRA")), na.rm = TRUE)) %>%
+  
+  mutate(OOFCH_avg = rowMeans(dplyr::select(., contains("OOFCH")), na.rm = TRUE)) %>%
+  mutate(OOFRH_avg = rowMeans(dplyr::select(., contains("OOFRH")), na.rm = TRUE)) %>%
+  mutate(SSFCH_avg = rowMeans(dplyr::select(., contains("SSFCH")), na.rm = TRUE)) %>%
+  mutate(SSFRH_avg = rowMeans(dplyr::select(., contains("SSFRH")), na.rm = TRUE)) %>%
+  
+  mutate(OOFCT_avg = rowMeans(dplyr::select(., contains("OOFCT")), na.rm = TRUE)) %>%
+  mutate(OOFRT_avg = rowMeans(dplyr::select(., contains("OOFRT")), na.rm = TRUE)) %>%
+  mutate(SSFCT_avg = rowMeans(dplyr::select(., contains("SSFCT")), na.rm = TRUE)) %>%
+  mutate(SSFRT_avg = rowMeans(dplyr::select(., contains("SSFRT")), na.rm = TRUE)) 
+
+df_filtered <- df %>%
+  dplyr::select(which(substr(names(df), 7, 9) == "avg"))
+
+femaleDists <- dist(t(df_filtered))
+
+femaleDistsMatrix <- as.matrix(femaleDists)
+
+fdis <- pheatmap(femaleDistsMatrix,
+         clustering_distance_rows=femaleDists,
+         clustering_distance_cols=femaleDists,
+         col=colors,
+         filename = "fdis_heatmap2.png",
+         width=7.5,
+         height=7)
+
+```
+
+
+#### Males
+
+```{r}
+df <- as.data.frame(assay(vst_m))
+colors <- colorRampPalette( rev(brewer.pal(9, "Greens")) )(255)
+df_filtered <- df %>%
+  dplyr::select(which(substr(names(df), 4, 4) == "C"))
+
+colnames(df_filtered) <- paste(ifelse(substr(names(df_filtered), 1, 2)=="SS", "Sim", "Mel"), substr(names(df_filtered), 5, 5), sep="-")
+
+
+
+df_filtered <- as.matrix(df_filtered)
+
+maleDists <- dist(t(df_filtered))
+
+maleDistsMatrix <- as.matrix(maleDists)
+
+mdis <- pheatmap(maleDistsMatrix,
+         clustering_distance_rows=maleDists,
+         clustering_distance_cols=maleDists,
+         col=colors,
+         filename = "mdis_heatmap.png",
+         width=7.5,
+         height=7)
+mdis
+```
+
+```{r}
+df <- df %>%
+  mutate(OOMCA_avg = rowMeans(dplyr::select(., contains("OOMCA")), na.rm = TRUE)) %>%
+  mutate(OOMRA_avg = rowMeans(dplyr::select(., contains("OOMRA")), na.rm = TRUE)) %>%
+  mutate(SSMCA_avg = rowMeans(dplyr::select(., contains("SSMCA")), na.rm = TRUE)) %>%
+  mutate(SSMRA_avg = rowMeans(dplyr::select(., contains("SSMRA")), na.rm = TRUE)) %>%
+  
+  mutate(OOMCH_avg = rowMeans(dplyr::select(., contains("OOMCH")), na.rm = TRUE)) %>%
+  mutate(OOMRH_avg = rowMeans(dplyr::select(., contains("OOMRH")), na.rm = TRUE)) %>%
+  mutate(SSMCH_avg = rowMeans(dplyr::select(., contains("SSMCH")), na.rm = TRUE)) %>%
+  mutate(SSMRH_avg = rowMeans(dplyr::select(., contains("SSMRH")), na.rm = TRUE)) %>%
+  
+  mutate(OOMCT_avg = rowMeans(dplyr::select(., contains("OOMCT")), na.rm = TRUE)) %>%
+  mutate(OOMRT_avg = rowMeans(dplyr::select(., contains("OOMRT")), na.rm = TRUE)) %>%
+  mutate(SSMCT_avg = rowMeans(dplyr::select(., contains("SSMCT")), na.rm = TRUE)) %>%
+  mutate(SSMRT_avg = rowMeans(dplyr::select(., contains("SSMRT")), na.rm = TRUE)) 
+
+df_filtered <- df %>%
+  dplyr::select(which(substr(names(df), 7, 9) == "avg"))
+
+df_filtered <- as.matrix(df_filtered)
+
+maleDists <- dist(t(df_filtered))
+
+maleDistsMatrix <- as.matrix(maleDists)
+
+mdis <- pheatmap(maleDistsMatrix,
+         clustering_distance_rows=maleDists,
+         clustering_distance_cols=maleDists,
+         col=colors,
+         filename = "mdis_heatmap2.png",
+         width=7.5,
+         height=7)
+mdis
+```
+
+
+##PERMANOVA
+
+#### All data
+
+```{r}
+vst <- vst(dds, blind = TRUE)
+sampleDists <- dist(t(assay(vst))) 
+
+adonis2(sampleDists ~ Species+Sex+Tissue + Treatment, data = coldata, permutations = 10000, by = "margin")
+```
+
+#### Females
+
+```{r}
+df_fem <- as.data.frame(assay(vst_f))
+dist_matrix_fem <- dist(t(df_fem))
+adonis2(dist_matrix_fem ~ Species+Tissue + Treatment, data = coldata_f, permutations = 10000, by = "margin")
+```
+#### Males
+
+```{r}
+df_male <- as.data.frame(assay(vst_m))
+dist_matrix_male <- dist(t(df_male))
+adonis2(dist_matrix_male ~ Species+Tissue + Treatment, data = coldata_m, permutations = 10000, by = "margin")
+
+```
+
+#### Thorax
+```{r}
+sampleDists <- dist(t(assay(vst_T))) 
+adonis2(sampleDists ~ Species+Sex + Treatment, data = coldata_T, permutations = 10000, by = "margin")
+
+```
+
+#### Abdomen
+
+```{r}
+sampleDists <- dist(t(assay(vst_A))) 
+adonis2(sampleDists ~ Species+Sex + Treatment, data = coldata_A, permutations = 10000, by = "margin")
+
+```
+
+#### Head
+```{r}
+sampleDists <- dist(t(assay(vst_H))) 
+adonis2(sampleDists ~ Species+Sex + Treatment, data = coldata_H, permutations = 10000, by = "margin")
+
+```
+
+
+####Species
+
+```{r}
+dds_OO <- DESeqDataSetFromMatrix(countData = cts_OO,
+                              colData = coldata_OO,
+                              design = ~ Tissue + Treatment + Sex)
+vst_OO <- vst(dds_OO, blind = TRUE)
+
+sampleDists <- dist(t(assay(vst_OO))) 
+adonis2(sampleDists ~ Tissue+Sex + Treatment, data = coldata_OO, permutations = 10000, by = "margin")
+
+dds_SS <- DESeqDataSetFromMatrix(countData = cts_SS,
+                              colData = coldata_SS,
+                              design = ~ Tissue + Treatment + Sex)
+vst_SS <- vst(dds_SS, blind = TRUE)
+
+sampleDists <- dist(t(assay(vst_SS))) 
+adonis2(sampleDists ~ Tissue+Sex + Treatment, data = coldata_SS, permutations = 10000, by = "margin")
+```
+
+```{r session_info}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`

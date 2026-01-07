@@ -1,0 +1,1840 @@
+---
+title: "D. melanogaster/ D. simulans expression analysis: Rapamycin Treatment Effects"
+output:
+  html_document:
+    toc: true
+params:
+   FDR: 0.05
+   LFC: 0.0
+date: "2024-05-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+set.seed(1234)
+
+ifelse(!dir.exists("results/GSEA"), dir.create("results/GSEA", recursive=TRUE), print("directory already exists"))
+```
+
+
+This document depends on the following packages:
+```{r, message=FALSE, warning = FALSE}
+require(drosophila2.db)
+library(tidyverse)
+library(DESeq2)
+library(apeglm)
+library(eulerr)
+library(EnhancedVolcano)
+library(flybaseR)
+library(org.Dm.eg.db)
+library("org.Dm.eg.db")
+library(AnnotationDbi)
+library(repr)
+library(vsn)
+library(pheatmap)
+library(clusterProfiler)
+library(DEGreport)
+source("FBidsTOSymbol.R")
+source("mito_genes.R")
+library("RNAseqQC")
+library("ensembldb")
+library("dplyr")
+library("ggplot2")
+library("purrr")
+library("tidyr")
+library("tibble")
+library("magrittr")
+library(simplifyEnrichment)
+library("fgsea")
+library(stats)
+library(msigdbr)
+library(GO.db)
+library(ggridges)
+library(enrichplot)
+library(ggupset)
+library(UpSetR)
+library(rrvgo)
+library("IHW")
+library(patchwork)
+library(ggrepel)
+library(ggpubr) 
+library(gridExtra)
+library(cowplot)
+source("calculate_divergence_metrics_NES.R")
+
+```
+
+### Go annotations set up
+
+```{r set up GO annotations}
+orgDb=org.Dm.eg.db
+columns(orgDb)
+
+all_flybase_ids <- keys(orgDb, keytype = "FLYBASE")
+
+go_annotations <- select(orgDb, keys = all_flybase_ids, columns = c("FLYBASE", "GO"), keytype = "FLYBASE")
+# kegg_annotations <- select(orgDb, keys = all_flybase_ids, columns = c("FLYBASE", "PATH"), keytype = "FLYBASE")
+# kegg_annotations <- na.omit(kegg_annotations)
+
+go_annotations <- go_annotations %>% 
+  dplyr::filter(ONTOLOGY=="BP")
+
+go_annotations <- go_annotations[, c("GO","FLYBASE")]
+go_annotations <- na.omit(go_annotations)
+
+go_annotations$TERM <- select(GO.db, keys = go_annotations$GO, columns = "TERM", keytype = "GOID")$TERM
+go_annotations <- go_annotations[, c("TERM", "FLYBASE", "GO")]
+
+go_annotations$NAME <- paste(go_annotations$GO, go_annotations$TERM, sep=" ")
+go_annotations <- go_annotations[,c("NAME","FLYBASE")]
+```
+
+
+## FEMALE HEADS
+
+```{r subset count data to female heads}
+gene_universe_fh <- readLines("universe/gene_universe_fh.txt")
+go_annotations_fh <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_fh)
+```
+
+#### Treatment effects
+
+```{r degs for treatments effect RvsC female heads}
+res_fh_RvsC_OO <- readRDS("species_treatment_effect/res_fh_RvsC_OO.rds")
+res_fh_RvsC_OO_Ordered <- res_fh_RvsC_OO[order(res_fh_RvsC_OO$pvalue),]
+res_fh_RvsC_OO_Sig <- subset(res_fh_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+res_fh_RvsC_SS <- readRDS("species_treatment_effect/res_fh_RvsC_SS.rds")
+res_fh_RvsC_SS_Ordered <- res_fh_RvsC_SS[order(res_fh_RvsC_SS$pvalue),]
+res_fh_RvsC_SS_Sig <- subset(res_fh_RvsC_SS_Ordered, padj < FDR.Thresh)
+```
+
+#### GSEA Female Heads
+
+```{r}
+res_fh_OO <- as.data.frame(res_fh_RvsC_OO)
+res_fh_OO <- res_fh_OO %>% dplyr::filter(!is.na(padj))
+
+genes_fh_ranked_OO <- res_fh_OO$stat
+names(genes_fh_ranked_OO) <- row.names(res_fh_OO)
+
+
+max_ranking <- max(genes_fh_ranked_OO[is.finite(genes_fh_ranked_OO)])
+min_ranking <- min(genes_fh_ranked_OO[is.finite(genes_fh_ranked_OO)])
+
+#genes_fh_ranked_OO <- replace(genes_fh_ranked_OO, genes_fh_ranked_OO > max_ranking, max_ranking * 10)
+#genes_fh_ranked_OO <- replace(genes_fh_ranked_OO, genes_fh_ranked_OO < min_ranking, min_ranking * 10)
+
+genes_fh_ranked_OO <- sort(genes_fh_ranked_OO, decreasing = TRUE) # sort genes by ranking
+
+gse_fh_OO <- GSEA(genes_fh_ranked_OO, TERM2GENE = go_annotations_fh, eps=1e-300, pvalueCutoff=1.0)
+gse_fh_OO_df <- as.data.frame(gse_fh_OO) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+
+dotplot(gse_fh_OO, showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Female Head")
+###
+
+res_fh_SS <- as.data.frame(res_fh_RvsC_SS)
+res_fh_SS <- res_fh_SS %>% dplyr::filter(!is.na(padj))
+
+genes_fh_ranked_SS <- res_fh_SS$stat 
+names(genes_fh_ranked_SS) <- row.names(res_fh_SS)
+
+
+max_ranking <- max(genes_fh_ranked_SS[is.finite(genes_fh_ranked_SS)])
+min_ranking <- min(genes_fh_ranked_SS[is.finite(genes_fh_ranked_SS)])
+
+#genes_fh_ranked_SS <- replace(genes_fh_ranked_SS, genes_fh_ranked_SS > max_ranking, max_ranking * 10)
+#genes_fh_ranked_SS <- replace(genes_fh_ranked_SS, genes_fh_ranked_SS < min_ranking, min_ranking * 10)
+
+genes_fh_ranked_SS <- sort(genes_fh_ranked_SS, decreasing = TRUE) # sort genes by ranking
+
+gse_fh_SS <- GSEA(genes_fh_ranked_SS, TERM2GENE = go_annotations_fh, eps=1e-300, pvalueCutoff=1.0)
+gse_fh_SS_df <- as.data.frame(gse_fh_SS) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+#view(gse_fh_SS_df)
+dotplot(gse_fh_SS, showCategory=20, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Female Head")
+
+```
+
+#### OO gsea plot NES
+
+```{r, OO fh nes}
+fh_OO_gsea_plot_nes <- gse_fh_OO_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  # group_by(Effect) %>%
+  # slice_min(p.adjust, n = 10) %>%
+  # ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+fh_OO_gsea_plot_nes
+ggsave("results/GSEA/fh_OO_gsea_plot_NES.pdf", plot = fh_OO_gsea_plot_nes, width = 12, height = 10, dpi = 300)
+```
+
+#### SS gsea plot NES
+
+```{r, SS fh nes}
+fh_SS_gsea_plot_nes <- gse_fh_SS_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  # group_by(Effect) %>%
+  # slice_min(p.adjust, n = 10) %>%
+  # ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 20),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+```
+
+#### Plot
+
+```{r}
+fhgseplot <- plot_grid(fh_OO_gsea_plot_nes, fh_SS_gsea_plot_nes, labels = c("A", "B"),label_size = 26)
+ggsave("results/GSEA/Female_Head_GSEA_NES.png", plot = fhgseplot, width = 23, height = 27.5, dpi = 600)
+```
+
+#### NES Comparison 1
+
+```{r}
+all_sig_cats_fh <- union(dplyr::filter(gse_fh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fh_SS_df, p.adjust<0.05)$Description)
+
+
+gsea_OOfh <- gse_fh_OO_df[all_sig_cats_fh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOfh")
+
+gsea_SSfh <- gse_fh_SS_df[all_sig_cats_fh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSfh")
+
+merged_gse_fh_df <- full_join(gsea_OOfh, gsea_SSfh, by = "ID", suffix = c("_OO", "_SS"))
+
+merged_gse_fh_df <- merged_gse_fh_df %>%
+  mutate(SignificanceGroup = case_when(
+    p.adjust_OO <= 0.05 & p.adjust_SS <= 0.05 ~ "Both",
+    p.adjust_OO <= 0.05 & p.adjust_SS > 0.05 ~ "D.melanogaster",
+    p.adjust_OO > 0.05 & p.adjust_SS <= 0.05 ~ "D.simulans",
+    TRUE ~ "Not significant"
+  ))
+```
+
+
+## FEMALE THORAX
+
+```{r subset count data to female thorax}
+gene_universe_ft <- readLines("universe/gene_universe_ft.txt")
+go_annotations_ft <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_ft)
+```
+
+#### Treatment effects
+
+```{r degs for treatments effect RvsC female thorax}
+res_ft_RvsC_OO <- readRDS("species_treatment_effect/res_ft_RvsC_OO.rds")
+res_ft_RvsC_OO_Ordered <- res_ft_RvsC_OO[order(res_ft_RvsC_OO$pvalue),]
+res_ft_RvsC_OO_Sig <- subset(res_ft_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+res_ft_RvsC_SS <- readRDS("species_treatment_effect/res_ft_RvsC_SS.rds")
+res_ft_RvsC_SS_Ordered <- res_ft_RvsC_SS[order(res_ft_RvsC_SS$pvalue),]
+res_ft_RvsC_SS_Sig <- subset(res_ft_RvsC_SS_Ordered, padj < FDR.Thresh)
+```
+
+#### GSEA Female Thorax
+
+```{r}
+res_ft_OO <- as.data.frame(res_ft_RvsC_OO)
+res_ft_OO <- res_ft_OO %>% dplyr::filter(!is.na(padj))
+
+genes_ft_ranked_OO <- res_ft_OO$stat
+names(genes_ft_ranked_OO) <- row.names(res_ft_OO)
+
+
+max_ranking <- max(genes_ft_ranked_OO[is.finite(genes_ft_ranked_OO)])
+min_ranking <- min(genes_ft_ranked_OO[is.finite(genes_ft_ranked_OO)])
+
+#genes_ft_ranked_OO <- replace(genes_ft_ranked_OO, genes_ft_ranked_OO > max_ranking, max_ranking * 10)
+#genes_ft_ranked_OO <- replace(genes_ft_ranked_OO, genes_ft_ranked_OO < min_ranking, min_ranking * 10)
+
+genes_ft_ranked_OO <- sort(genes_ft_ranked_OO, decreasing = TRUE) # sort genes by ranking
+
+gse_ft_OO <- GSEA(genes_ft_ranked_OO, TERM2GENE = go_annotations_ft, eps=1e-300, pvalueCutoff=1.0)
+gse_ft_OO_df <- as.data.frame(gse_ft_OO) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+dotplot(gse_ft_OO, showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA OO Female Thorax")
+
+###
+
+res_ft_SS <- as.data.frame(res_ft_RvsC_SS)
+res_ft_SS <- res_ft_SS %>% dplyr::filter(!is.na(padj))
+
+genes_ft_ranked_SS <- res_ft_SS$stat 
+names(genes_ft_ranked_SS) <- row.names(res_ft_SS)
+
+
+max_ranking <- max(genes_ft_ranked_SS[is.finite(genes_ft_ranked_SS)])
+min_ranking <- min(genes_ft_ranked_SS[is.finite(genes_ft_ranked_SS)])
+
+#genes_ft_ranked_SS <- replace(genes_ft_ranked_SS, genes_ft_ranked_SS > max_ranking, max_ranking * 10)
+#genes_ft_ranked_SS <- replace(genes_ft_ranked_SS, genes_ft_ranked_SS < min_ranking, min_ranking * 10)
+
+genes_ft_ranked_SS <- sort(genes_ft_ranked_SS, decreasing = TRUE) # sort genes by ranking
+
+gse_ft_SS <- GSEA(genes_ft_ranked_SS, TERM2GENE = go_annotations_ft, eps=1e-300, pvalueCutoff=1.0)
+gse_ft_SS_df <- as.data.frame(gse_ft_SS) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+#view(gse_ft_SS_df)
+dotplot(gse_ft_SS, showCategory=20, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA SS Female Thorax")
+
+```
+
+#### OO gsea plot NES
+
+```{r, OO ft nes}
+ft_OO_gsea_plot_nes <- gse_ft_OO_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+
+```
+
+#### SS gsea plot NES
+
+```{r, SS ft nes}
+ft_SS_gsea_plot_nes <- gse_ft_SS_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+```
+
+
+#### Plot
+
+```{r}
+ftgseplot <- plot_grid(ft_OO_gsea_plot_nes, ft_SS_gsea_plot_nes, labels = c("A", "B"),label_size = 26)
+ggsave("results/GSEA/Female_Thorax_GSEA_NES.png", plot = ftgseplot, width = 23, height = 27.5, dpi = 600)
+```
+
+#### NES Comparison 1
+
+```{r}
+all_sig_cats_ft <- union(dplyr::filter(gse_ft_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ft_SS_df, p.adjust<0.05)$Description)
+
+
+gsea_OOft <- gse_ft_OO_df[all_sig_cats_ft, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOft")
+
+gsea_SSft <- gse_ft_SS_df[all_sig_cats_ft, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSft")
+
+merged_gse_ft_df <- full_join(gsea_OOft, gsea_SSft, by = "ID", suffix = c("_OO", "_SS"))
+
+merged_gse_ft_df <- merged_gse_ft_df %>%
+  mutate(SignificanceGroup = case_when(
+    p.adjust_OO <= 0.05 & p.adjust_SS <= 0.05 ~ "Both",
+    p.adjust_OO <= 0.05 & p.adjust_SS > 0.05 ~ "D.melanogaster",
+    p.adjust_OO > 0.05 & p.adjust_SS <= 0.05 ~ "D.simulans",
+    TRUE ~ "Not significant"
+  ))
+```
+
+## FEMALE ABDOMEN
+
+```{r subset count data to female abdomen}
+gene_universe_fa <- readLines("universe/gene_universe_fa.txt")
+go_annotations_fa <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_fa)
+```
+
+#### Treatment effects
+
+```{r degs for treatments effect RvsC female abdomen}
+res_fa_RvsC_OO <- readRDS("species_treatment_effect/res_fa_RvsC_OO.rds")
+res_fa_RvsC_OO_Ordered <- res_fa_RvsC_OO[order(res_fa_RvsC_OO$pvalue),]
+res_fa_RvsC_OO_Sig <- subset(res_fa_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+res_fa_RvsC_SS <- readRDS("species_treatment_effect/res_fa_RvsC_SS.rds")
+res_fa_RvsC_SS_Ordered <- res_fa_RvsC_SS[order(res_fa_RvsC_SS$pvalue),]
+res_fa_RvsC_SS_Sig <- subset(res_fa_RvsC_SS_Ordered, padj < FDR.Thresh)
+```
+
+#### GSEA Female Abdomen
+
+```{r}
+res_fa_OO <- as.data.frame(res_fa_RvsC_OO)
+res_fa_OO <- res_fa_OO %>% dplyr::filter(!is.na(padj))
+
+genes_fa_ranked_OO <- res_fa_OO$stat
+names(genes_fa_ranked_OO) <- row.names(res_fa_OO)
+
+
+max_ranking <- max(genes_fa_ranked_OO[is.finite(genes_fa_ranked_OO)])
+min_ranking <- min(genes_fa_ranked_OO[is.finite(genes_fa_ranked_OO)])
+
+#genes_fa_ranked_OO <- replace(genes_fa_ranked_OO, genes_fa_ranked_OO > max_ranking, max_ranking * 10)
+#genes_fa_ranked_OO <- replace(genes_fa_ranked_OO, genes_fa_ranked_OO < min_ranking, min_ranking * 10)
+
+genes_fa_ranked_OO <- sort(genes_fa_ranked_OO, decreasing = TRUE) # sort genes by ranking
+
+gse_fa_OO <- GSEA(genes_fa_ranked_OO, TERM2GENE = go_annotations_fa, eps=1e-300, pvalueCutoff=1.0)
+gse_fa_OO_df <- as.data.frame(gse_fa_OO) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+dotplot(gse_fa_OO, showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Female Head")
+
+###
+
+res_fa_SS <- as.data.frame(res_fa_RvsC_SS)
+res_fa_SS <- res_fa_SS %>% dplyr::filter(!is.na(padj))
+
+genes_fa_ranked_SS <- res_fa_SS$stat 
+names(genes_fa_ranked_SS) <- row.names(res_fa_SS)
+
+
+max_ranking <- max(genes_fa_ranked_SS[is.finite(genes_fa_ranked_SS)])
+min_ranking <- min(genes_fa_ranked_SS[is.finite(genes_fa_ranked_SS)])
+
+#genes_fa_ranked_SS <- replace(genes_fa_ranked_SS, genes_fa_ranked_SS > max_ranking, max_ranking * 10)
+#genes_fa_ranked_SS <- replace(genes_fa_ranked_SS, genes_fa_ranked_SS < min_ranking, min_ranking * 10)
+
+genes_fa_ranked_SS <- sort(genes_fa_ranked_SS, decreasing = TRUE) # sort genes by ranking
+
+gse_fa_SS <- GSEA(genes_fa_ranked_SS, TERM2GENE = go_annotations_fa, eps=1e-300, pvalueCutoff=1.0)
+gse_fa_SS_df <- as.data.frame(gse_fa_SS) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+#view(gse_fa_SS_df)
+dotplot(gse_fa_SS, showCategory=20, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Female Head")
+
+```
+
+#### OO gsea plot NES
+
+```{r, OO fa nes}
+fa_OO_gsea_plot_nes <- gse_fa_OO_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+```
+
+#### SS gsea plot NES
+
+```{r, SS fa nes}
+fa_SS_gsea_plot_nes <- gse_fa_SS_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+
+```
+
+#### Plot
+
+```{r, fig.height=12}
+
+fagseplot <- plot_grid(fa_OO_gsea_plot_nes, fa_SS_gsea_plot_nes, labels = c("A", "B"),label_size = 26)
+ggsave("results/GSEA/Female_Abdomen_GSEA_NES.png", plot = fagseplot, width = 23, height = 27.5, dpi = 600)
+```
+
+#### NES Comparison 1
+
+```{r}
+all_sig_cats_fa <- union(dplyr::filter(gse_fa_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fa_SS_df, p.adjust<0.05)$Description)
+
+
+gsea_OOfa <- gse_fa_OO_df[all_sig_cats_fa, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOfa")
+
+gsea_SSfa <- gse_fa_SS_df[all_sig_cats_fa, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSfa")
+
+merged_gse_fa_df <- full_join(gsea_OOfa, gsea_SSfa, by = "ID", suffix = c("_OO", "_SS"))
+
+merged_gse_fa_df <- merged_gse_fa_df %>%
+  mutate(SignificanceGroup = case_when(
+    p.adjust_OO <= 0.05 & p.adjust_SS <= 0.05 ~ "Both",
+    p.adjust_OO <= 0.05 & p.adjust_SS > 0.05 ~ "D.melanogaster",
+    p.adjust_OO > 0.05 & p.adjust_SS <= 0.05 ~ "D.simulans",
+    TRUE ~ "Not significant"
+  ))
+```
+
+## MALE HEADS
+
+```{r subset count data to male heads}
+gene_universe_mh <- readLines("universe/gene_universe_mh.txt")
+go_annotations_mh <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_mh)
+```
+
+#### Treatment effects
+
+```{r degs for treatments effect RvsC male heads}
+res_mh_RvsC_OO <- readRDS("species_treatment_effect/res_mh_RvsC_OO.rds")
+res_mh_RvsC_OO_Ordered <- res_mh_RvsC_OO[order(res_mh_RvsC_OO$pvalue),]
+res_mh_RvsC_OO_Sig <- subset(res_mh_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+res_mh_RvsC_SS <- readRDS("species_treatment_effect/res_mh_RvsC_SS.rds")
+res_mh_RvsC_SS_Ordered <- res_mh_RvsC_SS[order(res_mh_RvsC_SS$pvalue),]
+res_mh_RvsC_SS_Sig <- subset(res_mh_RvsC_SS_Ordered, padj < FDR.Thresh)
+```
+
+#### GSEA Male Heads
+
+```{r}
+res_mh_OO <- as.data.frame(res_mh_RvsC_OO)
+res_mh_OO <- res_mh_OO %>% dplyr::filter(!is.na(padj))
+
+genes_mh_ranked_OO <- res_mh_OO$stat
+names(genes_mh_ranked_OO) <- row.names(res_mh_OO)
+
+
+max_ranking <- max(genes_mh_ranked_OO[is.finite(genes_mh_ranked_OO)])
+min_ranking <- min(genes_mh_ranked_OO[is.finite(genes_mh_ranked_OO)])
+
+#genes_mh_ranked_OO <- replace(genes_mh_ranked_OO, genes_mh_ranked_OO > max_ranking, max_ranking * 10)
+#genes_mh_ranked_OO <- replace(genes_mh_ranked_OO, genes_mh_ranked_OO < min_ranking, min_ranking * 10)
+
+genes_mh_ranked_OO <- sort(genes_mh_ranked_OO, decreasing = TRUE) # sort genes by ranking
+
+gse_mh_OO <- GSEA(genes_mh_ranked_OO, TERM2GENE = go_annotations_mh, eps=1e-300, pvalueCutoff=1.0)
+gse_mh_OO_df <- as.data.frame(gse_mh_OO) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+
+dotplot(gse_mh_OO, showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Male Head")
+###
+
+res_mh_SS <- as.data.frame(res_mh_RvsC_SS)
+res_mh_SS <- res_mh_SS %>% dplyr::filter(!is.na(padj))
+
+genes_mh_ranked_SS <- res_mh_SS$stat 
+names(genes_mh_ranked_SS) <- row.names(res_mh_SS)
+
+
+max_ranking <- max(genes_mh_ranked_SS[is.finite(genes_mh_ranked_SS)])
+min_ranking <- min(genes_mh_ranked_SS[is.finite(genes_mh_ranked_SS)])
+
+#genes_mh_ranked_SS <- replace(genes_mh_ranked_SS, genes_mh_ranked_SS > max_ranking, max_ranking * 10)
+#genes_mh_ranked_SS <- replace(genes_mh_ranked_SS, genes_mh_ranked_SS < min_ranking, min_ranking * 10)
+
+genes_mh_ranked_SS <- sort(genes_mh_ranked_SS, decreasing = TRUE) # sort genes by ranking
+
+gse_mh_SS <- GSEA(genes_mh_ranked_SS, TERM2GENE = go_annotations_mh, eps=1e-300, pvalueCutoff=1.0)
+gse_mh_SS_df <- as.data.frame(gse_mh_SS) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+#view(gse_mh_SS_df)
+dotplot(gse_mh_SS, showCategory=20, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Male Head")
+
+```
+
+#### OO gsea plot NES
+
+```{r, OO fh nes}
+mh_OO_gsea_plot_nes <- gse_mh_OO_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+```
+
+#### SS gsea plot NES
+
+```{r, SS fh nes}
+mh_SS_gsea_plot_nes <- gse_mh_SS_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+
+```
+
+
+#### Plot
+
+```{r}
+fhgseplot <- plot_grid(mh_OO_gsea_plot_nes, mh_SS_gsea_plot_nes, labels = c("A", "B"),label_size = 26)
+ggsave("results/GSEA/Male_Head_GSEA_NES.png", plot = fhgseplot, width = 23, height = 27.5, dpi = 600)
+```
+#### NES Comparison 1
+
+```{r}
+all_sig_cats_mh <- union(dplyr::filter(gse_mh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mh_SS_df, p.adjust<0.05)$Description)
+
+
+gsea_OOfh <- gse_mh_OO_df[all_sig_cats_mh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOfh")
+
+gsea_SSfh <- gse_mh_SS_df[all_sig_cats_mh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSfh")
+
+merged_gse_mh_df <- full_join(gsea_OOfh, gsea_SSfh, by = "ID", suffix = c("_OO", "_SS"))
+
+merged_gse_mh_df <- merged_gse_mh_df %>%
+  mutate(SignificanceGroup = case_when(
+    p.adjust_OO <= 0.05 & p.adjust_SS <= 0.05 ~ "Both",
+    p.adjust_OO <= 0.05 & p.adjust_SS > 0.05 ~ "D.melanogaster",
+    p.adjust_OO > 0.05 & p.adjust_SS <= 0.05 ~ "D.simulans",
+    TRUE ~ "Not significant"
+  ))
+```
+
+## MALE THORAX
+
+```{r subset count data to male thorax}
+gene_universe_mt <- readLines("universe/gene_universe_mt.txt")
+go_annotations_mt <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_mt)
+```
+
+#### Treatment effects
+
+```{r degs for treatments effect RvsC male thorax}
+res_mt_RvsC_OO <- readRDS("species_treatment_effect/res_mt_RvsC_OO.rds")
+res_mt_RvsC_OO_Ordered <- res_mt_RvsC_OO[order(res_mt_RvsC_OO$pvalue),]
+res_mt_RvsC_OO_Sig <- subset(res_mt_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+res_mt_RvsC_SS <- readRDS("species_treatment_effect/res_mt_RvsC_SS.rds")
+res_mt_RvsC_SS_Ordered <- res_mt_RvsC_SS[order(res_mt_RvsC_SS$pvalue),]
+res_mt_RvsC_SS_Sig <- subset(res_mt_RvsC_SS_Ordered, padj < FDR.Thresh)
+```
+
+#### GSEA Male Thorax
+
+```{r}
+res_mt_OO <- as.data.frame(res_mt_RvsC_OO)
+res_mt_OO <- res_mt_OO %>% dplyr::filter(!is.na(padj))
+
+genes_mt_ranked_OO <- res_mt_OO$stat
+names(genes_mt_ranked_OO) <- row.names(res_mt_OO)
+
+
+max_ranking <- max(genes_mt_ranked_OO[is.finite(genes_mt_ranked_OO)])
+min_ranking <- min(genes_mt_ranked_OO[is.finite(genes_mt_ranked_OO)])
+
+#genes_mt_ranked_OO <- replace(genes_mt_ranked_OO, genes_mt_ranked_OO > max_ranking, max_ranking * 10)
+#genes_mt_ranked_OO <- replace(genes_mt_ranked_OO, genes_mt_ranked_OO < min_ranking, min_ranking * 10)
+
+genes_mt_ranked_OO <- sort(genes_mt_ranked_OO, decreasing = TRUE) # sort genes by ranking
+
+gse_mt_OO <- GSEA(genes_mt_ranked_OO, TERM2GENE = go_annotations_mt, eps=1e-300, pvalueCutoff=1.0)
+gse_mt_OO_df <- as.data.frame(gse_mt_OO) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+dotplot(gse_mt_OO, showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA OO Male Thorax")
+
+###
+
+res_mt_SS <- as.data.frame(res_mt_RvsC_SS)
+res_mt_SS <- res_mt_SS %>% dplyr::filter(!is.na(padj))
+
+genes_mt_ranked_SS <- res_mt_SS$stat 
+names(genes_mt_ranked_SS) <- row.names(res_mt_SS)
+
+
+max_ranking <- max(genes_mt_ranked_SS[is.finite(genes_mt_ranked_SS)])
+min_ranking <- min(genes_mt_ranked_SS[is.finite(genes_mt_ranked_SS)])
+
+#genes_mt_ranked_SS <- replace(genes_mt_ranked_SS, genes_mt_ranked_SS > max_ranking, max_ranking * 10)
+#genes_mt_ranked_SS <- replace(genes_mt_ranked_SS, genes_mt_ranked_SS < min_ranking, min_ranking * 10)
+
+genes_mt_ranked_SS <- sort(genes_mt_ranked_SS, decreasing = TRUE) # sort genes by ranking
+
+gse_mt_SS <- GSEA(genes_mt_ranked_SS, TERM2GENE = go_annotations_mt, eps=1e-300, pvalueCutoff=1.0)
+gse_mt_SS_df <- as.data.frame(gse_mt_SS) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+#view(gse_mt_SS_df)
+dotplot(gse_mt_SS, showCategory=20, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA SS Male Thorax")
+
+```
+
+#### OO gsea plot NES
+
+```{r, OO ft nes}
+mt_OO_gsea_plot_nes <- gse_mt_OO_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+
+```
+
+#### SS gsea plot NES
+
+```{r, SS ft nes}
+mt_SS_gsea_plot_nes <- gse_mt_SS_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+```
+
+
+#### Plot
+
+```{r}
+ftgseplot <- plot_grid(mt_OO_gsea_plot_nes, mt_SS_gsea_plot_nes, labels = c("A", "B"),label_size = 26)
+ggsave("results/GSEA/Male_Thorax_GSEA_NES.png", plot = ftgseplot, width = 23, height = 27.5, dpi = 600)
+```
+#### NES Comparison 1
+
+```{r}
+all_sig_cats_mt <- union(dplyr::filter(gse_mt_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mt_SS_df, p.adjust<0.05)$Description)
+
+
+gsea_OOft <- gse_mt_OO_df[all_sig_cats_mt, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOft")
+
+gsea_SSft <- gse_mt_SS_df[all_sig_cats_mt, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSft")
+
+merged_gse_mt_df <- full_join(gsea_OOft, gsea_SSft, by = "ID", suffix = c("_OO", "_SS"))
+
+merged_gse_mt_df <- merged_gse_mt_df %>%
+  mutate(SignificanceGroup = case_when(
+    p.adjust_OO <= 0.05 & p.adjust_SS <= 0.05 ~ "Both",
+    p.adjust_OO <= 0.05 & p.adjust_SS > 0.05 ~ "D.melanogaster",
+    p.adjust_OO > 0.05 & p.adjust_SS <= 0.05 ~ "D.simulans",
+    TRUE ~ "Not significant"
+  ))
+```
+
+## MALE ABDOMEN
+
+```{r subset count data to male abdomen}
+gene_universe_ma <- readLines("universe/gene_universe_ma.txt")
+go_annotations_ma <- go_annotations %>%
+  dplyr::filter(FLYBASE %in% gene_universe_ma)
+```
+
+#### Treatment effects
+
+```{r degs for treatments effect RvsC male abdomen}
+res_ma_RvsC_OO <- readRDS("species_treatment_effect/res_ma_RvsC_OO.rds")
+res_ma_RvsC_OO_Ordered <- res_ma_RvsC_OO[order(res_ma_RvsC_OO$pvalue),]
+res_ma_RvsC_OO_Sig <- subset(res_ma_RvsC_OO_Ordered, padj < FDR.Thresh)
+
+res_ma_RvsC_SS <- readRDS("species_treatment_effect/res_ma_RvsC_SS.rds")
+res_ma_RvsC_SS_Ordered <- res_ma_RvsC_SS[order(res_ma_RvsC_SS$pvalue),]
+res_ma_RvsC_SS_Sig <- subset(res_ma_RvsC_SS_Ordered, padj < FDR.Thresh)
+```
+
+#### GSEA Male Abdomen
+
+```{r}
+res_ma_OO <- as.data.frame(res_ma_RvsC_OO)
+res_ma_OO <- res_ma_OO %>% dplyr::filter(!is.na(padj))
+
+genes_ma_ranked_OO <- res_ma_OO$stat
+names(genes_ma_ranked_OO) <- row.names(res_ma_OO)
+
+
+max_ranking <- max(genes_ma_ranked_OO[is.finite(genes_ma_ranked_OO)])
+min_ranking <- min(genes_ma_ranked_OO[is.finite(genes_ma_ranked_OO)])
+
+#genes_ma_ranked_OO <- replace(genes_ma_ranked_OO, genes_ma_ranked_OO > max_ranking, max_ranking * 10)
+#genes_ma_ranked_OO <- replace(genes_ma_ranked_OO, genes_ma_ranked_OO < min_ranking, min_ranking * 10)
+
+genes_ma_ranked_OO <- sort(genes_ma_ranked_OO, decreasing = TRUE) # sort genes by ranking
+
+gse_ma_OO <- GSEA(genes_ma_ranked_OO, TERM2GENE = go_annotations_ma, eps=1e-300, pvalueCutoff=1.0)
+gse_ma_OO_df <- as.data.frame(gse_ma_OO) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+dotplot(gse_ma_OO, showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Male Head")
+
+###
+
+res_ma_SS <- as.data.frame(res_ma_RvsC_SS)
+res_ma_SS <- res_ma_SS %>% dplyr::filter(!is.na(padj))
+
+genes_ma_ranked_SS <- res_ma_SS$stat 
+names(genes_ma_ranked_SS) <- row.names(res_ma_SS)
+
+
+max_ranking <- max(genes_ma_ranked_SS[is.finite(genes_ma_ranked_SS)])
+min_ranking <- min(genes_ma_ranked_SS[is.finite(genes_ma_ranked_SS)])
+
+#genes_ma_ranked_SS <- replace(genes_ma_ranked_SS, genes_ma_ranked_SS > max_ranking, max_ranking * 10)
+#genes_ma_ranked_SS <- replace(genes_ma_ranked_SS, genes_ma_ranked_SS < min_ranking, min_ranking * 10)
+
+genes_ma_ranked_SS <- sort(genes_ma_ranked_SS, decreasing = TRUE) # sort genes by ranking
+
+gse_ma_SS <- GSEA(genes_ma_ranked_SS, TERM2GENE = go_annotations_ma, eps=1e-300, pvalueCutoff=1.0)
+gse_ma_SS_df <- as.data.frame(gse_ma_SS) %>%
+  mutate(Effect = ifelse(NES > 0, "activated", "suppressed"))
+#view(gse_ma_SS_df)
+dotplot(gse_ma_SS, showCategory=20, split=".sign") + facet_grid(.~.sign) + ggtitle("GSEA Male Head")
+
+```
+
+#### OO gsea plot NES
+
+```{r, OO fa nes}
+ma_OO_gsea_plot_nes <- gse_ma_OO_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+
+```
+
+#### SS gsea plot NES
+
+```{r, SS fa nes}
+ma_SS_gsea_plot_nes <- gse_ma_SS_df %>%
+  arrange(p.adjust) %>% dplyr::filter(p.adjust <= 0.05)%>% 
+  #slice_min(p.adjust, n=20)%>%
+  group_by(Effect) %>%
+  slice_min(p.adjust, n = 10) %>%
+  ungroup() %>%
+  mutate(Description = substr(Description, 11, nchar((Description)))) %>%
+  mutate(GeneCount = sapply(strsplit(core_enrichment, "/"), length)) %>%
+  mutate(GeneRatio = GeneCount/setSize) %>%
+  mutate(Description = str_wrap(Description, width = 25)) %>%
+  mutate(Direction = if_else(Effect == 'suppressed',-1,1)) %>%
+  ggplot(aes(x = reorder(Description, p.adjust*Direction), 
+           y = NES)) +
+
+  geom_segment(
+  aes(x = Description, xend = Description, y = 0, yend = NES, color = p.adjust),
+  linewidth = 1.1,
+  lineend = "round",
+  alpha = 0.8
+) +
+geom_point(
+  aes(fill = p.adjust, size = GeneCount),
+  shape = 21,
+  color = "black",   # border
+  stroke = 1.1,
+  alpha = 0.9
+) +
+#facet_wrap(~Direction, labeller = as_labeller(c(`1` = "Activated", `-1` = "Suppressed"))) +
+  scale_color_gradient(low = "#f768a1",high = "#7a0177", name = "FDR") +
+scale_fill_gradient(low = "#f768a1",high = "#7a0177", name = "FDR")+
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway",
+       y = "Normalized Enrichment Score",
+       size = "Gene Count",
+       color = "FDR") +
+    scale_size_continuous(range = c(5, 10)) + # Adjust the range as needed +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.key.width = unit(1.5, "cm"),
+    legend.box.just = "center", 
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 26),
+    axis.title.x = element_text(size = 26), 
+    legend.text = element_text(size = 18),
+    legend.title=element_text(size = 18, hjust = 0.5),
+    strip.text = element_text(size = 15, face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    strip.background = element_rect(color = "black", fill = "lightgrey", linewidth = 1)
+  ) +
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    fill = guide_colorbar(title.position = "top", barwidth = 10, nrow = 2),
+    size = guide_legend(nrow = 2, title.position = "top")
+  )
+
+
+```
+
+
+#### Plot
+
+```{r}
+fagseplot <- plot_grid(ma_OO_gsea_plot_nes, ma_SS_gsea_plot_nes, labels = c("A", "B"),label_size = 26)
+ggsave("results/GSEA/Male_Abdomen_GSEA_NES.png", plot = fagseplot, width = 23, height = 27.5, dpi = 600)
+```
+
+#### NES Comparison 1
+
+```{r}
+all_sig_cats_ma <- union(dplyr::filter(gse_ma_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ma_SS_df, p.adjust<0.05)$Description)
+
+
+gsea_OOfa <- gse_ma_OO_df[all_sig_cats_ma, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOfa")
+
+gsea_SSfa <- gse_ma_SS_df[all_sig_cats_ma, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSfa")
+
+merged_gse_ma_df <- full_join(gsea_OOfa, gsea_SSfa, by = "ID", suffix = c("_OO", "_SS"))
+
+merged_gse_ma_df <- merged_gse_ma_df %>%
+  mutate(SignificanceGroup = case_when(
+    p.adjust_OO <= 0.05 & p.adjust_SS <= 0.05 ~ "Both",
+    p.adjust_OO <= 0.05 & p.adjust_SS > 0.05 ~ "D.melanogaster",
+    p.adjust_OO > 0.05 & p.adjust_SS <= 0.05 ~ "D.simulans",
+    TRUE ~ "Not significant"
+  ))
+```
+
+## All NES comparisons
+
+#### Barplot
+
+```{r}
+
+
+
+FH <- c("Shared" = length(intersect(dplyr::filter(gse_fh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fh_SS_df, p.adjust<0.05)$Description)), 
+        "OreR;OreR private" = length(setdiff(dplyr::filter(gse_fh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fh_SS_df, p.adjust<0.05)$Description)), 
+        "sm21;sm21 private" = length(setdiff(dplyr::filter(gse_fh_SS_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fh_OO_df, p.adjust<0.05)$Description)))
+
+FT <- c("Shared" = length(intersect(dplyr::filter(gse_ft_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ft_SS_df, p.adjust<0.05)$Description)), 
+        "OreR;OreR private" = length(setdiff(dplyr::filter(gse_ft_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ft_SS_df, p.adjust<0.05)$Description)), 
+        "sm21;sm21 private" = length(setdiff(dplyr::filter(gse_ft_SS_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ft_OO_df, p.adjust<0.05)$Description)))
+
+FA <- c("Shared" = length(intersect(dplyr::filter(gse_fa_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fa_SS_df, p.adjust<0.05)$Description)), 
+        "OreR;OreR private" = length(setdiff(dplyr::filter(gse_fa_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fa_SS_df, p.adjust<0.05)$Description)), 
+        "sm21;sm21 private" = length(setdiff(dplyr::filter(gse_fa_SS_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fa_OO_df, p.adjust<0.05)$Description)))
+
+MH <- c("Shared" = length(intersect(dplyr::filter(gse_mh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mh_SS_df, p.adjust<0.05)$Description)), 
+        "OreR;OreR private" = length(setdiff(dplyr::filter(gse_mh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mh_SS_df, p.adjust<0.05)$Description)), 
+        "sm21;sm21 private" = length(setdiff(dplyr::filter(gse_mh_SS_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mh_OO_df, p.adjust<0.05)$Description)))
+
+MT <- c("Shared" = length(intersect(dplyr::filter(gse_mt_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mt_SS_df, p.adjust<0.05)$Description)), 
+        "OreR;OreR private" = length(setdiff(dplyr::filter(gse_mt_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mt_SS_df, p.adjust<0.05)$Description)), 
+        "sm21;sm21 private" = length(setdiff(dplyr::filter(gse_mt_SS_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mt_OO_df, p.adjust<0.05)$Description)))
+
+MA <- c("Shared" = length(intersect(dplyr::filter(gse_ma_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ma_SS_df, p.adjust<0.05)$Description)), 
+        "OreR;OreR private" = length(setdiff(dplyr::filter(gse_ma_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ma_SS_df, p.adjust<0.05)$Description)), 
+        "sm21;sm21 private" = length(setdiff(dplyr::filter(gse_ma_SS_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ma_OO_df, p.adjust<0.05)$Description)))
+
+cat_counts <- cbind(as.data.frame(FH),as.data.frame(FT), as.data.frame(FA),
+              as.data.frame(MH),as.data.frame(MT), as.data.frame(MA)) %>%
+  t() %>% as.data.frame() %>%
+  mutate(Sample=row.names(.))
+
+cat_counts <- pivot_longer(cat_counts, cols = all_of(c("Shared", "OreR;OreR private", "sm21;sm21 private")), names_to = "Type", values_to = "Count")
+cat_counts$Sex <- substr(cat_counts$Sample, 1,1)
+cat_counts$Tissue <- substr(cat_counts$Sample, 2,2)
+cat_counts <- cat_counts %>%
+  mutate(Sex = ifelse(Sex=="F", "Female", "Male"))
+
+cat_counts <- cat_counts %>%
+  mutate(Tissue = ifelse(Tissue=="T", "Thorax",
+                         ifelse(Tissue=="A", "Abdomen", "Head")))
+cat_counts$SexTissue <- paste(cat_counts$Sex, cat_counts$Tissue, sep = "\n")
+saveRDS(cat_counts, "cat_counts.Rds")
+```
+
+#### Spearman
+
+```{r}
+all_cats_fh <- union(gse_fh_OO_df$Description, gse_fh_SS_df$Description)
+gsea_OOfh_all <- gse_fh_OO_df[all_cats_fh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOfh")
+gsea_SSfh_all <- gse_fh_SS_df[all_cats_fh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSfh")
+merged_gse_fh_all <- full_join(gsea_OOfh_all, gsea_SSfh_all, by = "ID", suffix = c("_OO", "_SS"))
+
+all_cats_ft <- union(gse_ft_OO_df$Description, gse_ft_SS_df$Description)
+gsea_OOft_all <- gse_ft_OO_df[all_cats_ft, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOft")
+gsea_SSft_all <- gse_ft_SS_df[all_cats_ft, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSft")
+merged_gse_ft_all <- full_join(gsea_OOft_all, gsea_SSft_all, by = "ID", suffix = c("_OO", "_SS"))
+
+all_cats_fa <- union(gse_fa_OO_df$Description, gse_fa_SS_df$Description)
+gsea_OOfa_all <- gse_fa_OO_df[all_cats_fa, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOfa")
+gsea_SSfa_all <- gse_fa_SS_df[all_cats_fa, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSfa")
+merged_gse_fa_all <- full_join(gsea_OOfa_all, gsea_SSfa_all, by = "ID", suffix = c("_OO", "_SS"))
+
+
+all_cats_mh <- union(gse_mh_OO_df$Description, gse_mh_SS_df$Description)
+gsea_OOmh_all <- gse_mh_OO_df[all_cats_mh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOmh")
+gsea_SSmh_all <- gse_mh_SS_df[all_cats_mh, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSmh")
+merged_gse_mh_all <- full_join(gsea_OOmh_all, gsea_SSmh_all, by = "ID", suffix = c("_OO", "_SS"))
+
+all_cats_mt <- union(gse_mt_OO_df$Description, gse_mt_SS_df$Description)
+gsea_OOmt_all <- gse_mt_OO_df[all_cats_mt, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOmt")
+gsea_SSmt_all <- gse_mt_SS_df[all_cats_mt, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSmt")
+merged_gse_mt_all <- full_join(gsea_OOmt_all, gsea_SSmt_all, by = "ID", suffix = c("_OO", "_SS"))
+
+all_cats_ma <- union(gse_ma_OO_df$Description, gse_ma_SS_df$Description)
+gsea_OOma_all <- gse_ma_OO_df[all_cats_ma, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "OOma")
+gsea_SSma_all <- gse_ma_SS_df[all_cats_ma, ] %>% 
+  dplyr::select(ID, p.adjust, NES) %>% mutate(Group = "SSma")
+merged_gse_ma_all <- full_join(gsea_OOma_all, gsea_SSma_all, by = "ID", suffix = c("_OO", "_SS"))
+```
+
+```{r}
+results_divergence_metrics_all <- bind_rows(
+  calculate_divergence_metrics_NES(merged_gse_fh_all, "Female Head"),
+  calculate_divergence_metrics_NES(merged_gse_mh_all, "Male Head"),
+  calculate_divergence_metrics_NES(merged_gse_fa_all, "Female Abdomen"),
+  calculate_divergence_metrics_NES(merged_gse_ma_all, "Male Abdomen"),
+  calculate_divergence_metrics_NES(merged_gse_ft_all, "Female Thorax"),
+  calculate_divergence_metrics_NES(merged_gse_mt_all, "Male Thorax")
+) 
+```
+
+
+```{r}
+results_divergence_metrics_all <- results_divergence_metrics_all %>%
+  mutate(
+    SexTissue = factor(
+      paste(Sex, Tissue, sep = "\n"),
+      levels = c(
+        "Female\nHead",
+        "Female\nThorax",
+        "Female\nAbdomen",
+        "Male\nHead",
+        "Male\nThorax",
+        "Male\nAbdomen"
+      )
+    )
+  )
+
+dE_plot <- 
+ggplot(results_divergence_metrics_all, aes(x = SexTissue, y = Euclidean, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = Euclidean_low, ymax = Euclidean_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    y = expression("Divergence (" * italic(d)[E] * ")")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+dcor_plot <- 
+ggplot(results_divergence_metrics_all, aes(x = SexTissue, y = OneMinusRho, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = OneMinusRho_low, ymax = OneMinusRho_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    y = expression("Divergence (" * italic(d)[cor] * ")")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+
+
+divergence_plot <- plot_grid(
+  dcor_plot, 
+  dE_plot, 
+  ncol = 2, 
+  labels = c("A", "B"),
+  label_size = 18
+)
+
+ggsave("Fig4.png", divergence_plot,
+      width = 8.7,
+      height = 3.5)
+```
+
+
+
+```{r}
+results_divergence_metrics_sig <- bind_rows(
+  calculate_divergence_metrics_NES(merged_gse_fh_df, "Female Head"),
+  calculate_divergence_metrics_NES(merged_gse_mh_df, "Male Head"),
+  calculate_divergence_metrics_NES(merged_gse_fa_df, "Female Abdomen"),
+  calculate_divergence_metrics_NES(merged_gse_ma_df, "Male Abdomen"),
+  calculate_divergence_metrics_NES(merged_gse_ft_df, "Female Thorax"),
+  calculate_divergence_metrics_NES(merged_gse_mt_df, "Male Thorax")
+) 
+```
+
+```{r}
+results_divergence_metrics_sig <- results_divergence_metrics_sig %>%
+  mutate(
+    SexTissue = factor(
+      paste(Sex, Tissue, sep = "\n"),
+      levels = c(
+        "Female\nHead",
+        "Female\nThorax",
+        "Female\nAbdomen",
+        "Male\nHead",
+        "Male\nThorax",
+        "Male\nAbdomen"
+      )
+    )
+  )
+
+dE_plot <- 
+ggplot(results_divergence_metrics_sig, aes(x = SexTissue, y = Euclidean, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = Euclidean_low, ymax = Euclidean_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    y = expression("Divergence (" * italic(d)[E] * ")")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+dcor_plot <- 
+ggplot(results_divergence_metrics_sig, aes(x = SexTissue, y = OneMinusRho, color = Sex)) +
+  geom_errorbar(
+    aes(ymin = OneMinusRho_low, ymax = OneMinusRho_high, color = Sex),
+    size = 1, width = 0.3, alpha = 1
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Female" = "salmon", "Male" = "#b07aa1")) +
+  theme_minimal() +
+  labs(
+    x = NULL,
+    y = expression("Divergence (" * italic(d)[cor] * ")")
+  ) +
+  theme(
+    text = element_text(size = 13),
+    axis.text.x = element_text(size = 12, angle = 45, hjust = 1),  # smaller x labels
+    legend.position = "none"
+  )
+
+
+
+divergence_plot <- plot_grid(
+  dcor_plot, 
+  dE_plot, 
+  ncol = 2, 
+  labels = c("A", "B"),
+  label_size = 18
+)
+
+ggsave("FigS_GOdivergence.png", divergence_plot,
+      width = 8.7,
+      height = 3.5)
+```
+
+#### Jaccard
+
+```{r}
+
+fh_intersect <- intersect(dplyr::filter(gse_fh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fh_SS_df, p.adjust<0.05)$Description)
+fh_union <- union(dplyr::filter(gse_fh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fh_SS_df, p.adjust<0.05)$Description)
+fh_jaccard_index <- length(fh_intersect)/length(fh_union)
+fh_jaccard_distance <- 1 - fh_jaccard_index
+
+
+ft_intersect <- intersect(dplyr::filter(gse_ft_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ft_SS_df, p.adjust<0.05)$Description)
+ft_union <- union(dplyr::filter(gse_ft_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ft_SS_df, p.adjust<0.05)$Description)
+ft_jaccard_index <- length(ft_intersect)/length(ft_union)
+ft_jaccard_distance <- 1 - ft_jaccard_index
+
+
+
+
+fa_intersect <- intersect(dplyr::filter(gse_fa_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fa_SS_df, p.adjust<0.05)$Description)
+fa_union <- union(dplyr::filter(gse_fa_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_fa_SS_df, p.adjust<0.05)$Description)
+fa_jaccard_index <- length(fa_intersect)/length(fa_union)
+fa_jaccard_distance <- 1 - fa_jaccard_index
+
+fh_jaccard_distance
+ft_jaccard_distance
+fa_jaccard_distance
+```
+
+
+```{r}
+
+mh_intersect <- intersect(dplyr::filter(gse_mh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mh_SS_df, p.adjust<0.05)$Description)
+mh_union <- union(dplyr::filter(gse_mh_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mh_SS_df, p.adjust<0.05)$Description)
+mh_jaccard_index <- length(mh_intersect)/length(mh_union)
+mh_jaccard_distance <- 1 - mh_jaccard_index
+
+
+mt_intersect <- intersect(dplyr::filter(gse_mt_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mt_SS_df, p.adjust<0.05)$Description)
+mt_union <- union(dplyr::filter(gse_mt_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_mt_SS_df, p.adjust<0.05)$Description)
+mt_jaccard_index <- length(mt_intersect)/length(mt_union)
+mt_jaccard_distance <- 1 - mt_jaccard_index
+
+
+
+
+ma_intersect <- intersect(dplyr::filter(gse_ma_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ma_SS_df, p.adjust<0.05)$Description)
+ma_union <- union(dplyr::filter(gse_ma_OO_df, p.adjust<0.05)$Description, 
+                         dplyr::filter(gse_ma_SS_df, p.adjust<0.05)$Description)
+ma_jaccard_index <- length(ma_intersect)/length(ma_union)
+ma_jaccard_distance <- 1 - ma_jaccard_index
+
+mh_jaccard_distance
+mt_jaccard_distance
+ma_jaccard_distance
+```
+
+
+## Save results into an Supplementary Table
+
+```{r}
+library(openxlsx)
+
+write.xlsx(
+  list(
+    "Female_Head_D.mel"    = gse_fh_OO_df,
+    "Female_Head_D.sim"    = gse_fh_SS_df,
+    "Male_Head_D.mel"      = gse_mh_OO_df,
+    "Male_Head_D.sim"      = gse_mh_SS_df,
+    
+    "Female_Thorax_D.mel"    = gse_ft_OO_df,
+    "Female_Thorax_D.sim"    = gse_ft_SS_df,
+    "Male_Thorax_D.mel"      = gse_mt_OO_df,
+    "Male_Thorax_D.sim"      = gse_mt_SS_df,
+    
+    "Female_Abdomen_D.mel"    = gse_fa_OO_df,
+    "Female_Abdomen_D.sim"    = gse_fa_SS_df,
+    "Male_Abdomen_D.mel"      = gse_ma_OO_df,
+    "Male_Abdomen_D.sim"      = gse_ma_SS_df
+  
+  ),
+  file = "GSEA_rapamycin_first_order.xlsx",
+  overwrite = TRUE
+)
+
+```
+
+```{r session_info}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`
