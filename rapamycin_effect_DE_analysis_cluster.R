@@ -1,3 +1,5 @@
+## code used for DE analyses on the cluster
+
 library(DESeq2)
 library(apeglm)
 library(vsn)

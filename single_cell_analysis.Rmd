@@ -1,0 +1,222 @@
+---
+title: "single cell analysis"
+output: html_document
+date: "2026-09-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+set.seed(1234)
+```
+
+
+```{r}
+library(dplyr)
+library(tibble)
+library(DESeq2)
+```
+# Upload interaction genes
+
+```{r}
+## Female Heads Significant Interaction Genes
+fhi <- readRDS("species_by_treatment/fhi.Rds") 
+fhi_Ordered <- fhi[order(fhi$pvalue),]
+fhi_Sig <- subset(fhi_Ordered, padj < FDR.Thresh) 
+
+## Female Thorax Significant Interaction Genes
+fti <- readRDS("species_by_treatment/fti.Rds") 
+fti_Ordered <- fti[order(fti$pvalue),]
+fti_Sig <- subset(fti_Ordered, padj < FDR.Thresh) 
+
+## Female Abdomen Significant Interaction Genes
+fai <- readRDS("species_by_treatment/fai.Rds") 
+fai_Ordered <- fai[order(fai$pvalue),]
+fai_Sig <- subset(fai_Ordered, padj < FDR.Thresh) 
+
+
+## Male Heads Significant Interaction Genes
+mhi <- readRDS("species_by_treatment/mhi.Rds") 
+mhi_Ordered <- mhi[order(mhi$pvalue),]
+mhi_Sig <- subset(mhi_Ordered, padj < FDR.Thresh)
+
+## Male Thorax Significant Interaction Genes
+mti <- readRDS("species_by_treatment/mti.Rds") 
+mti_Ordered <- mti[order(mti$pvalue),]
+mti_Sig <- subset(mti_Ordered, padj < FDR.Thresh) 
+
+## Male Abdomen Significant Interaction Genes
+mai <- readRDS("species_by_treatment/mai.Rds") 
+mai_Ordered <- mai[order(mai$pvalue),]
+mai_Sig <- subset(mai_Ordered, padj < FDR.Thresh)
+```
+
+```{r}
+interaction_genes <- bind_rows(
+  as.data.frame(fhi_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Female", Tissue = "Head"),
+
+  as.data.frame(fti_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Female", Tissue = "Thorax"),
+
+  as.data.frame(fai_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Female", Tissue = "Abdomen"),
+
+  as.data.frame(mhi_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Male", Tissue = "Head"),
+
+  as.data.frame(mti_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Male", Tissue = "Thorax"),
+
+  as.data.frame(mai_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Male", Tissue = "Abdomen")
+) %>%
+  dplyr::select(FlyBase, Sex, Tissue, log2FoldChange, lfcSE, stat, pvalue, padj)%>%
+  mutate(
+    SexTissue = paste(Sex, Tissue, sep = "_")
+  )
+```
+
+# upload FCA markers
+
+```{r}
+fca_markers <- read.delim(
+  "E-MTAB-10519-marker-genes-files/E-MTAB-10519.marker_genes_inferred_cell_type_-_ontology_labels.tsv",
+  header = TRUE,
+  sep = "\t",
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+```
+
+# create background and interaction gene name lists
+```{r}
+background_genes <- list(
+  Female_Head    = rownames(fhi)[!is.na(fhi$padj)],
+  Female_Thorax  = rownames(fti)[!is.na(fti$padj)],
+  Female_Abdomen = rownames(fai)[!is.na(fai$padj)],
+  Male_Head      = rownames(mhi)[!is.na(mhi$padj)],
+  Male_Thorax    = rownames(mti)[!is.na(mti$padj)],
+  Male_Abdomen   = rownames(mai)[!is.na(mai$padj)]
+)
+
+interaction_gene_sets <- list(
+  Female_Head    = rownames(fhi)[!is.na(fhi$padj) & fhi$padj < FDR.Thresh],
+  Female_Thorax  = rownames(fti)[!is.na(fti$padj) & fti$padj < FDR.Thresh],
+  Female_Abdomen = rownames(fai)[!is.na(fai$padj) & fai$padj < FDR.Thresh],
+  Male_Head      = rownames(mhi)[!is.na(mhi$padj) & mhi$padj < FDR.Thresh],
+  Male_Thorax    = rownames(mti)[!is.na(mti$padj) & mti$padj < FDR.Thresh],
+  Male_Abdomen   = rownames(mai)[!is.na(mai$padj) & mai$padj < FDR.Thresh]
+)
+
+```
+
+# clean up fca 
+```{r}
+fca_sets <- fca_markers %>%
+  select(cluster, genes) %>%
+  filter(!is.na(cluster) , !is.na(genes)) %>%
+  distinct() %>%
+  group_by(cluster) %>%
+  summarise(
+    genes = list(unique(genes)),
+    .groups = "drop"
+  )
+```
+
+# run enrichment tests
+
+```{r}
+enrichment_results <- lapply(names(interaction_gene_sets), function(comparison) {
+  
+  # Get significant genes and background
+  sig <- interaction_gene_sets[[comparison]]
+  bg <- background_genes[[comparison]]
+  
+  # Genes that are both tested and represented in FCA
+  universe <- intersect(bg, unique(fca_markers$genes))
+  query <- intersect(sig, universe)
+  
+  # Test enrichment for each FCA cell type
+  res <- lapply(seq_len(nrow(fca_sets)), function(i) {
+    
+    # Get marker genes for this cell type
+    markers <- intersect(fca_sets$genes[[i]], universe)
+    
+    # Count significant interact genes that are also FCA markers
+    overlap <- sum(query %in% markers)
+    
+    # Calculate the overlap expected by chance
+    expected <- length(query) * length(markers) / length(universe)
+    
+    # Build the 2 x 2 table for Fisher 
+    mat <- matrix(c(
+      overlap,
+      length(markers) - overlap,
+      length(query) - overlap,
+      length(universe) - length(markers) - length(query) + overlap
+    ), nrow = 2)
+    
+    # Test for enrichment
+    ft <- fisher.test(mat, alternative = "greater")
+    
+    data.frame(
+      Comparison = comparison,
+      CellType = fca_sets$cluster[i],
+      N_query = length(query),
+      N_markers = length(markers),
+      N_overlap = overlap,
+      Expected = expected,
+      ObservedExpected = overlap / expected,
+      OddsRatio = unname(ft$estimate),
+      Pvalue = ft$p.value
+    )
+  })
+  
+  bind_rows(res)
+  
+}) %>%
+  bind_rows()
+```
+
+```{r}
+# Correct for multiple testing (for each sex/tissue combo)
+
+enrichment_results <- enrichment_results %>%
+  group_by(Comparison) %>%
+  mutate(FDR = p.adjust(Pvalue, method = "BH")) %>%
+  ungroup()
+
+significant_enrichments <- enrichment_results %>%
+  filter(FDR < 0.05, OddsRatio > 1)%>%
+  arrange(FDR)
+
+```
+
+# save to excel suppl. table
+
+```{r}
+library(openxlsx)
+
+write.xlsx(
+  list(
+    "All_results"    = enrichment_results,
+    "Significant_enrichments"    = significant_enrichments
+  ),
+  file = "TableS6_cell_type-marker_enrichment.xlsx",
+  overwrite = TRUE
+)
+```
+
+
+

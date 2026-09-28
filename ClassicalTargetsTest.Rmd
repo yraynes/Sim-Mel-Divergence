@@ -1,0 +1,256 @@
+---
+title: "D. melanogaster/ D. simulans expression analysis: classic REPTOR targets "
+output:
+  html_document:
+    toc: true
+params:
+   FDR: 0.05
+   LFC: 0.0
+date: "2024-05-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+set.seed(1234)
+```
+
+## Load packages.
+
+This document depends on the following packages:
+```{r, message=FALSE, warning = FALSE}
+library(pheatmap)
+library(readxl)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(fgsea)
+```
+
+## Load DESeq2 results
+
+```{r}
+res_fh_RvsC_OO <- as.data.frame(readRDS("species_treatment_effect/res_fh_RvsC_OO.rds"))
+res_fh_RvsC_SS <- as.data.frame(readRDS("species_treatment_effect/res_fh_RvsC_SS.rds"))
+
+res_mh_RvsC_OO <- as.data.frame(readRDS("species_treatment_effect/res_mh_RvsC_OO.rds"))
+res_mh_RvsC_SS <- as.data.frame(readRDS("species_treatment_effect/res_mh_RvsC_SS.rds"))
+
+res_ft_RvsC_OO <- as.data.frame(readRDS("species_treatment_effect/res_ft_RvsC_OO.rds"))
+res_ft_RvsC_SS <- as.data.frame(readRDS("species_treatment_effect/res_ft_RvsC_SS.rds"))
+
+res_mt_RvsC_OO <- as.data.frame(readRDS("species_treatment_effect/res_mt_RvsC_OO.rds"))
+res_mt_RvsC_SS <- as.data.frame(readRDS("species_treatment_effect/res_mt_RvsC_SS.rds"))
+
+res_fa_RvsC_OO <- as.data.frame(readRDS("species_treatment_effect/res_fa_RvsC_OO.rds"))
+res_fa_RvsC_SS <- as.data.frame(readRDS("species_treatment_effect/res_fa_RvsC_SS.rds"))
+
+res_ma_RvsC_OO <- as.data.frame(readRDS("species_treatment_effect/res_ma_RvsC_OO.rds"))
+res_ma_RvsC_SS <- as.data.frame(readRDS("species_treatment_effect/res_ma_RvsC_SS.rds"))
+```
+
+## GSEA
+
+### Upload Reptor genes from Tiebe 2015, Table S4
+
+```{r}
+reptor_s4 <- readxl::read_excel("1-s2.0-S1534580715001811-mmc5.xlsx", skip = 2)
+
+reptor_targets <- reptor_s4 %>%
+  dplyr::rename(
+    FlyBase = `FlyBase ID`
+  ) %>%
+  dplyr::filter(!is.na(FlyBase)) %>%
+  dplyr::distinct(FlyBase, .keep_all = TRUE)
+```
+
+### Separate the REPTOR-induced and REPTOR-repressed genes
+
+```{r}
+reptor_up_genes <- reptor_targets %>%
+  dplyr::filter(
+    `Control_rapamycin vs. Control_EtOH.fold_change` >= 2
+  ) %>%
+  dplyr::pull(FlyBase)
+
+reptor_down_genes <- reptor_targets %>%
+  dplyr::filter(
+    `Control_rapamycin vs. Control_EtOH.fold_change` <= 0.5
+  ) %>%
+  dplyr::pull(FlyBase)
+```
+
+### Define the gene sets
+
+```{r}
+reptor_pathways <- list(
+  `REPTOR-induced` = reptor_up_genes,
+  `REPTOR-repressed` = reptor_down_genes
+)
+```
+
+### Make the ranking function
+
+```{r}
+make_reptor_rank <- function(res) {
+  
+  rank_df <- res %>%
+    as.data.frame() %>%
+    rownames_to_column("FlyBase") %>%
+    filter(
+      !is.na(stat),
+      FlyBase != ""
+    ) %>%
+    group_by(FlyBase) %>%
+    slice_max(
+      abs(stat),
+      n = 1,
+      with_ties = FALSE
+    ) %>%
+    ungroup() %>%
+    select(FlyBase, stat)
+  
+  ranks <- rank_df$stat
+  names(ranks) <- rank_df$FlyBase
+  
+  sort(ranks, decreasing = TRUE)
+}
+
+```
+
+
+### fgseaSimple function
+
+```{r}
+run_reptor_gsea <- function(res, condition) {
+  
+  ranks <- make_reptor_rank(res)
+  
+  fgseaSimple(
+    pathways = reptor_pathways,
+    stats = ranks,
+    minSize = 15,
+    maxSize = 500,
+    nperm = 100000
+  ) %>%
+    mutate(
+      Condition = condition
+    ) %>%
+    select(Condition, pathway, ES, NES, pval, padj, size, leadingEdge
+    )
+}
+```
+
+
+### Run fgseaSimple
+
+```{r}
+set.seed(123)
+
+gsea_reptor <- dplyr::bind_rows(
+  run_reptor_gsea(res_fh_RvsC_OO, "F_Head_Mel"),
+  run_reptor_gsea(res_fh_RvsC_SS, "F_Head_Sim"),
+  run_reptor_gsea(res_mh_RvsC_OO, "M_Head_Mel"),
+  run_reptor_gsea(res_mh_RvsC_SS, "M_Head_Sim"),
+  run_reptor_gsea(res_ft_RvsC_OO, "F_Thorax_Mel"),
+  run_reptor_gsea(res_ft_RvsC_SS, "F_Thorax_Sim"),
+  run_reptor_gsea(res_mt_RvsC_OO, "M_Thorax_Mel"),
+  run_reptor_gsea(res_mt_RvsC_SS, "M_Thorax_Sim"),
+  run_reptor_gsea(res_fa_RvsC_OO, "F_Abdomen_Mel"),
+  run_reptor_gsea(res_fa_RvsC_SS, "F_Abdomen_Sim"),
+  run_reptor_gsea(res_ma_RvsC_OO, "M_Abdomen_Mel"),
+  run_reptor_gsea(res_ma_RvsC_SS, "M_Abdomen_Sim")
+)
+```
+
+
+```{r}
+gsea_reptor_csv <- gsea_reptor %>%
+  dplyr::mutate(
+    leadingEdge = sapply(leadingEdge, paste, collapse = ";")
+  )
+
+write.csv(
+  gsea_reptor_csv,
+  "gsea_reptor.csv",
+  row.names = FALSE
+)
+```
+
+```{r}
+condition_order <- c(
+  "F_Head_Mel", "F_Head_Sim",
+  "F_Thorax_Mel", "F_Thorax_Sim",
+  "F_Abdomen_Mel", "F_Abdomen_Sim",
+  "M_Head_Mel", "M_Head_Sim",
+  "M_Thorax_Mel", "M_Thorax_Sim",
+  "M_Abdomen_Mel", "M_Abdomen_Sim"
+)
+
+labels <- c(
+  "Head\nD. mel",
+  "Head\nD. sim",
+  "Thorax\nD. mel",
+  "Thorax\nD. sim",
+  "Abdomen\nD. mel",
+  "Abdomen\nD. sim",
+  "Head\nD. mel",
+  "Head\nD. sim",
+  "Thorax\nD. mel",
+  "Thorax\nD. sim",
+  "Abdomen\nD. mel",
+  "Abdomen\nD. sim"
+)
+
+heatmap_matrix <- gsea_reptor %>%
+  dplyr::select(Condition, pathway, NES) %>%
+  tidyr::pivot_wider(
+    names_from = Condition,
+    values_from = NES
+  ) %>%
+  tibble::column_to_rownames("pathway") %>%
+  as.matrix()
+
+heatmap_matrix <- heatmap_matrix[, condition_order]
+
+colnames(heatmap_matrix) <- labels
+```
+
+```{r}
+# Make heatmap
+png(
+  "REPTOR_NES_heatmap.png",
+  width = 10,
+  height = 4,
+  units = "in",
+  res = 300
+)
+
+pheatmap(
+  heatmap_matrix,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  breaks = seq(-3, 3, length.out = 101),
+  display_numbers = TRUE,
+  number_format = "%.2f",
+  border_color = NA,
+  number_color = "white",
+  fontsize = 10,
+  fontsize_number = 9,
+  angle_col = 45
+)
+
+dev.off()
+
+```
+
+```{r session_info}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`

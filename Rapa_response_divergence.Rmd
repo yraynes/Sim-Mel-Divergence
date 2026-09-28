@@ -1509,6 +1509,54 @@ ggsave("divergence_plot_suppl.png", divergence_plot_suppl,
 
 ### Figure 3
 
+
+```{r}
+rapa_OOFH <- rownames(res_fh_RvsC_OO_Sig) #effect of rapa in OO heads
+rapa_OOFT <- rownames(res_ft_RvsC_OO_Sig) #effect of rapa in OO thorax
+rapa_OOFA <- rownames(res_fa_RvsC_OO_Sig) #effect of rapa in OO abdomen
+
+rapa_SSFH <- rownames(res_fh_RvsC_SS_Sig) #effect of rapa in SS heads
+rapa_SSFT <- rownames(res_ft_RvsC_SS_Sig) #effect of rapa in SS thorax
+rapa_SSFA <- rownames(res_fa_RvsC_SS_Sig) #effect of rapa in SS abdomen
+
+rapa_OOMH <- rownames(res_mh_RvsC_OO_Sig) #effect of rapa in OO heads
+rapa_OOMT <- rownames(res_mt_RvsC_OO_Sig) #effect of rapa in OO thorax
+rapa_OOMA <- rownames(res_ma_RvsC_OO_Sig) #effect of rapa in OO abdomen
+
+rapa_SSMH <- rownames(res_mh_RvsC_SS_Sig) #effect of rapa in SS heads
+rapa_SSMT <- rownames(res_mt_RvsC_SS_Sig) #effect of rapa in SS thorax
+rapa_SSMA <- rownames(res_ma_RvsC_SS_Sig) #effect of rapa in SS abdomen
+
+FH <- c("Shared" = length(intersect(rapa_OOFH, rapa_SSFH)), "OreR;OreR private" = length(setdiff(rapa_OOFH, rapa_SSFH)), "sm21;sm21 private" = length(setdiff(rapa_SSFH, rapa_OOFH)))
+
+FT <- c("Shared" = length(intersect(rapa_OOFT, rapa_SSFT)), "OreR;OreR private" = length(setdiff(rapa_OOFT, rapa_SSFT)), "sm21;sm21 private" = length(setdiff(rapa_SSFT, rapa_OOFT)))
+
+FA <- c("Shared" = length(intersect(rapa_OOFA, rapa_SSFA)), "OreR;OreR private" = length(setdiff(rapa_OOFA, rapa_SSFA)), "sm21;sm21 private" = length(setdiff(rapa_SSFA, rapa_OOFA)))
+
+MH <- c("Shared" = length(intersect(rapa_OOMH, rapa_SSMH)), "OreR;OreR private" = length(setdiff(rapa_OOMH, rapa_SSMH)), "sm21;sm21 private" = length(setdiff(rapa_SSMH, rapa_OOMH)))
+
+MT <- c("Shared" = length(intersect(rapa_OOMT, rapa_SSMT)), "OreR;OreR private" = length(setdiff(rapa_OOMT, rapa_SSMT)), "sm21;sm21 private" = length(setdiff(rapa_SSMT, rapa_OOMT)))
+
+MA <- c("Shared" = length(intersect(rapa_OOMA, rapa_SSMA)), "OreR;OreR private" = length(setdiff(rapa_OOMA, rapa_SSMA)), "sm21;sm21 private" = length(setdiff(rapa_SSMA, rapa_OOMA)))
+
+gene_counts <- cbind(as.data.frame(FH),as.data.frame(FT), as.data.frame(FA),
+              as.data.frame(MH),as.data.frame(MT), as.data.frame(MA)) %>%
+  t() %>% as.data.frame() %>%
+  mutate(Sample=row.names(.))
+
+gene_counts <- pivot_longer(gene_counts, cols = all_of(c("Shared", "OreR;OreR private", "sm21;sm21 private")), names_to = "Type", values_to = "Count")
+gene_counts$Sex <- substr(gene_counts$Sample, 1,1)
+gene_counts$Tissue <- substr(gene_counts$Sample, 2,2)
+gene_counts <- gene_counts %>%
+  mutate(Sex = ifelse(Sex=="F", "Female", "Male"))
+
+gene_counts <- gene_counts %>%
+  mutate(Tissue = ifelse(Tissue=="T", "Thorax",
+                         ifelse(Tissue=="A", "Abdomen", "Head")))
+gene_counts$SexTissue <- paste(gene_counts$Sex, gene_counts$Tissue, sep = "\n")
+
+```
+
 ```{r}
 colors <- c(
   "In Both Species" = "midnightblue",    
@@ -1623,26 +1671,27 @@ library(openxlsx)
 
 write.xlsx(
   list(
-    "Female_Head_D.mel"    = res_fh_RvsC_OO,
-    "Female_Head_D.sim"    = res_fh_RvsC_SS,
-    "Male_Head_D.mel"      = res_mh_RvsC_OO,
-    "Male_Head_D.sim"      = res_mh_RvsC_SS,
+    "Female_Head_D.mel"    = cbind(Gene = rownames(res_fh_RvsC_OO), as.data.frame(res_fh_RvsC_OO)),
+    "Female_Head_D.sim"    = cbind(Gene = rownames(res_fh_RvsC_SS), as.data.frame(res_fh_RvsC_SS)),
     
-    "Female_Thorax_D.mel"    = res_ft_RvsC_OO,
-    "Female_Thorax_D.sim"    = res_ft_RvsC_SS,
-    "Male_Thorax_D.mel"      = res_mt_RvsC_OO,
-    "Male_Thorax_D.sim"      = res_mt_RvsC_SS,
+    "Male_Head_D.mel"      = cbind(Gene = rownames(res_mh_RvsC_OO), as.data.frame(res_mh_RvsC_OO)),
+    "Male_Head_D.sim"      = cbind(Gene = rownames(res_mh_RvsC_SS), as.data.frame(res_mh_RvsC_SS)),
     
-    "Female_Abdomen_D.mel"    = res_fa_RvsC_OO,
-    "Female_Abdomen_D.sim"    = res_fa_RvsC_SS,
-    "Male_Abdomen_D.mel"      = res_ma_RvsC_OO,
-    "Male_Abdomen_D.sim"      = res_ma_RvsC_SS
-  
+    "Female_Thorax_D.mel"  = cbind(Gene = rownames(res_ft_RvsC_OO), as.data.frame(res_ft_RvsC_OO)),
+    "Female_Thorax_D.sim"  = cbind(Gene = rownames(res_ft_RvsC_SS), as.data.frame(res_ft_RvsC_SS)),
+    
+    "Male_Thorax_D.mel"    = cbind(Gene = rownames(res_mt_RvsC_OO), as.data.frame(res_mt_RvsC_OO)),
+    "Male_Thorax_D.sim"    = cbind(Gene = rownames(res_mt_RvsC_SS), as.data.frame(res_mt_RvsC_SS)),
+    
+    "Female_Abdomen_D.mel" = cbind(Gene = rownames(res_fa_RvsC_OO), as.data.frame(res_fa_RvsC_OO)),
+    "Female_Abdomen_D.sim" = cbind(Gene = rownames(res_fa_RvsC_SS), as.data.frame(res_fa_RvsC_SS)),
+    
+    "Male_Abdomen_D.mel"   = cbind(Gene = rownames(res_ma_RvsC_OO), as.data.frame(res_ma_RvsC_OO)),
+    "Male_Abdomen_D.sim"   = cbind(Gene = rownames(res_ma_RvsC_SS), as.data.frame(res_ma_RvsC_SS))
   ),
   file = "rapamycin_first_order_effects.xlsx",
   overwrite = TRUE
 )
-
 ```
 
 

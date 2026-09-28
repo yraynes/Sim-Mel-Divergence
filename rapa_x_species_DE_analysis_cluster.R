@@ -1,3 +1,5 @@
+## code used for interaction analyses on the cluster
+
 params <-list(FDR = 0.05, LFC = 0)
 
 ## ----include=FALSE------------------------------------------------------------

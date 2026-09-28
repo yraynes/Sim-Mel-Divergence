@@ -1,0 +1,407 @@
+---
+title: "sequence_divergence"
+output: html_document
+date: "2026-09-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+FDR.Thresh <- params$FDR
+LFC.Thresh <- params$LFC
+set.seed(1234)
+```
+
+```{r}
+## Female Heads Significant Interaction Genes
+fhi <- readRDS("species_by_treatment/fhi.Rds") 
+fhi_Ordered <- fhi[order(fhi$pvalue),]
+fhi_Sig <- subset(fhi_Ordered, padj < FDR.Thresh) 
+
+## Female Thorax Significant Interaction Genes
+fti <- readRDS("species_by_treatment/fti.Rds") 
+fti_Ordered <- fti[order(fti$pvalue),]
+fti_Sig <- subset(fti_Ordered, padj < FDR.Thresh) 
+
+## Female Abdomen Significant Interaction Genes
+fai <- readRDS("species_by_treatment/fai.Rds") 
+fai_Ordered <- fai[order(fai$pvalue),]
+fai_Sig <- subset(fai_Ordered, padj < FDR.Thresh) 
+
+
+## Male Heads Significant Interaction Genes
+mhi <- readRDS("species_by_treatment/mhi.Rds") 
+mhi_Ordered <- mhi[order(mhi$pvalue),]
+mhi_Sig <- subset(mhi_Ordered, padj < FDR.Thresh)
+
+## Male Thorax Significant Interaction Genes
+mti <- readRDS("species_by_treatment/mti.Rds") 
+mti_Ordered <- mti[order(mti$pvalue),]
+mti_Sig <- subset(mti_Ordered, padj < FDR.Thresh) 
+
+## Male Abdomen Significant Interaction Genes
+mai <- readRDS("species_by_treatment/mai.Rds") 
+mai_Ordered <- mai[order(mai$pvalue),]
+mai_Sig <- subset(mai_Ordered, padj < FDR.Thresh)
+```
+
+```{r}
+library(dplyr)
+library(tibble)
+
+interaction_genes <- bind_rows(
+  as.data.frame(fhi_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Female", Tissue = "Head"),
+
+  as.data.frame(fti_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Female", Tissue = "Thorax"),
+
+  as.data.frame(fai_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Female", Tissue = "Abdomen"),
+
+  as.data.frame(mhi_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Male", Tissue = "Head"),
+
+  as.data.frame(mti_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Male", Tissue = "Thorax"),
+
+  as.data.frame(mai_Sig) %>%
+    rownames_to_column("FlyBase") %>%
+    mutate(Sex = "Male", Tissue = "Abdomen")
+) %>%
+  dplyr::select(FlyBase, Sex, Tissue, log2FoldChange, lfcSE, stat, pvalue, padj)
+```
+
+```{r}
+interaction_ids <- unique(interaction_genes$FlyBase)
+
+length(interaction_ids)
+
+writeLines(
+  interaction_ids,
+  "interaction_FlyBaseIDs.txt"
+)
+
+write.csv(
+  interaction_genes,
+  "interaction_genes.csv",
+  row.names = FALSE
+)
+```
+
+```{r}
+flydivas <- read_tsv(
+  "Dmel_Dsim_analysis_results_flydivas_v1.2",
+  show_col_types = FALSE
+)
+
+interaction_divergence <- interaction_genes %>%
+  left_join(
+    flydivas %>%
+      dplyr::select(
+        FlyBase = id,
+        symbol,
+        cg,
+        trx,
+        coverage,
+        omega,
+        dN,
+        dS
+      ),
+    by = "FlyBase"
+  )
+```
+
+## dN correlations
+
+```{r, female heads}
+fh <- interaction_divergence %>%
+  dplyr::filter(Sex == "Female", Tissue == "Head") %>%
+  dplyr::mutate(
+    dN = as.numeric(dN),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(dN))
+
+fh.cor.test <- cor.test(
+  abs(fh$log2FoldChange),
+  fh$dN,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, female abdomen}
+fa <- interaction_divergence %>%
+  dplyr::filter(Sex == "Female", Tissue == "Abdomen") %>%
+  dplyr::mutate(
+    dN = as.numeric(dN),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(dN))
+
+fa.cor.test <- cor.test(
+  abs(fa$log2FoldChange),
+  fa$dN,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, female thorax}
+ft <- interaction_divergence %>%
+  dplyr::filter(Sex == "Female", Tissue == "Thorax") %>%
+  dplyr::mutate(
+    dN = as.numeric(dN),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(dN))
+
+ft.cor.test <- cor.test(
+  abs(ft$log2FoldChange),
+  ft$dN,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, male heads}
+mh <- interaction_divergence %>%
+  dplyr::filter(Sex == "Male", Tissue == "Head") %>%
+  dplyr::mutate(
+    dN = as.numeric(dN),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(dN))
+
+mh.cor.test <- cor.test(
+  abs(mh$log2FoldChange),
+  mh$dN,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, male thorax}
+mt <- interaction_divergence %>%
+  dplyr::filter(Sex == "Male", Tissue == "Thorax") %>%
+  dplyr::mutate(
+    dN = as.numeric(dN),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(dN))
+
+mt.cor.test <- cor.test(
+  abs(mt$log2FoldChange),
+  mt$dN,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, male abdomen}
+ma <- interaction_divergence %>%
+  dplyr::filter(Sex == "Male", Tissue == "Abdomen") %>%
+  dplyr::mutate(
+    dN = as.numeric(dN),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(dN))
+
+ma.cor.test <- cor.test(
+  abs(ma$log2FoldChange),
+  ma$dN,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r}
+dN_cor_results <- data.frame(
+  Sex = c("Female", "Female", "Female", "Male", "Male", "Male"),
+  Tissue = c("Head", "Thorax", "Abdomen", "Head", "Thorax", "Abdomen"),
+  rho = c(
+    fh.cor.test$estimate,
+    ft.cor.test$estimate,
+    fa.cor.test$estimate,
+    mh.cor.test$estimate,
+    mt.cor.test$estimate,
+    ma.cor.test$estimate
+  ),
+  p = c(
+    fh.cor.test$p.value,
+    ft.cor.test$p.value,
+    fa.cor.test$p.value,
+    mh.cor.test$p.value,
+    mt.cor.test$p.value,
+    ma.cor.test$p.value
+  )
+)
+
+dN_cor_results
+
+dN_cor_results$padj <- p.adjust(
+  dN_cor_results$p,
+  method = "BH"
+)
+
+dN_cor_results
+```
+
+## omega correlations
+
+```{r, female heads}
+fh <- interaction_divergence %>%
+  dplyr::filter(Sex == "Female", Tissue == "Head") %>%
+  dplyr::mutate(
+    omega = as.numeric(omega),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(omega))
+
+fh.cor.test <- cor.test(
+  abs(fh$log2FoldChange),
+  fh$omega,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, female abdomen}
+fa <- interaction_divergence %>%
+  dplyr::filter(Sex == "Female", Tissue == "Abdomen") %>%
+  dplyr::mutate(
+    omega = as.numeric(omega),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(omega))
+
+fa.cor.test <- cor.test(
+  abs(fa$log2FoldChange),
+  fa$omega,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, female thorax}
+ft <- interaction_divergence %>%
+  dplyr::filter(Sex == "Female", Tissue == "Thorax") %>%
+  dplyr::mutate(
+    omega = as.numeric(omega),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(omega))
+
+ft.cor.test <- cor.test(
+  abs(ft$log2FoldChange),
+  ft$omega,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, male heads}
+mh <- interaction_divergence %>%
+  dplyr::filter(Sex == "Male", Tissue == "Head") %>%
+  dplyr::mutate(
+    omega = as.numeric(omega),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(omega))
+
+mh.cor.test <- cor.test(
+  abs(mh$log2FoldChange),
+  mh$omega,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, male thorax}
+mt <- interaction_divergence %>%
+  dplyr::filter(Sex == "Male", Tissue == "Thorax") %>%
+  dplyr::mutate(
+    omega = as.numeric(omega),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(omega))
+
+mt.cor.test <- cor.test(
+  abs(mt$log2FoldChange),
+  mt$omega,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r, male abdomen}
+ma <- interaction_divergence %>%
+  dplyr::filter(Sex == "Male", Tissue == "Abdomen") %>%
+  dplyr::mutate(
+    omega = as.numeric(omega),
+    log2FoldChange = as.numeric(log2FoldChange)
+  ) %>%
+  dplyr::filter(!is.na(log2FoldChange), !is.na(omega))
+
+ma.cor.test <- cor.test(
+  abs(ma$log2FoldChange),
+  ma$omega,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r}
+omega_cor_results <- data.frame(
+  Sex = c("Female", "Female", "Female", "Male", "Male", "Male"),
+  Tissue = c("Head", "Thorax", "Abdomen", "Head", "Thorax", "Abdomen"),
+  rho = c(
+    fh.cor.test$estimate,
+    ft.cor.test$estimate,
+    fa.cor.test$estimate,
+    mh.cor.test$estimate,
+    mt.cor.test$estimate,
+    ma.cor.test$estimate
+  ),
+  p = c(
+    fh.cor.test$p.value,
+    ft.cor.test$p.value,
+    fa.cor.test$p.value,
+    mh.cor.test$p.value,
+    mt.cor.test$p.value,
+    ma.cor.test$p.value
+  )
+)
+
+omega_cor_results
+
+omega_cor_results$padj <- p.adjust(
+  omega_cor_results$p,
+  method = "BH"
+)
+
+omega_cor_results
+```
+
+## Save in a table
+
+```{r}
+library(openxlsx)
+
+write.xlsx(
+  list(
+    "dN_correlation"    = dN_cor_results,
+    "omega_correlations"    = omega_cor_results),
+  file = "LFC_sequence_divergence_correlations.xlsx",
+  overwrite = TRUE
+)
+
+```
